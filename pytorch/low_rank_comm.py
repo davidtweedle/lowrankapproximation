@@ -1,3 +1,6 @@
+"""
+Low rank communication for pytorch
+"""
 from absl import logging
 from collections import defaultdict
 from typing import Dict
@@ -57,6 +60,12 @@ class LowRankApproximationState:
             self.global_step += 1
 
 def svd_approximator(grad, upper_bound_rank, svd_rank, device, n_gpus):
+    """
+    Approximate gradient by U * sigma * V^T
+    using svd_lowrank from pytorch
+    upper_bound_rank: maximum rank to use for input to svd_lowrank
+    svd_rank: columns of U, V to use for approximation
+    """
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
     m, n, _ = *reshaped_grad.shape, 1
@@ -79,6 +88,9 @@ def svd_approximator(grad, upper_bound_rank, svd_rank, device, n_gpus):
     return grad
 
 def normalize_sv_approximator(grad, rank, device, n_gpus):
+    """
+    Approximate the gradient by grad = U * V^T
+    """
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
     m, n, _ = *reshaped_grad.shape, 1
@@ -99,7 +111,10 @@ def normalize_sv_approximator(grad, rank, device, n_gpus):
 
 
 def sketch_approximator(grad, low_rank, device, n_gpus):
-    ## figure out how to set random seeds on each device independently
+    """
+    Approximate gradient by low rank sketches
+    See: https://arxiv.org/abs/2009.11392
+    """
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
     m, n, _ = *reshaped_grad.shape, 1
@@ -122,6 +137,10 @@ def sketch_approximator(grad, low_rank, device, n_gpus):
 
 
 def low_rank_sketch(grad, state: LowRankApproximationState):
+    """
+    Approximate grad by U * V^T
+    Return U and V^T for all gathering
+    """
     m, n = grad.shape[-2:]
     rank = min(state.matrix_approximation_rank, m, n)
     U, _, V = torch.svd_lowrank(grad, niter=state.num_iter_svd, q=rank)
@@ -129,6 +148,10 @@ def low_rank_sketch(grad, state: LowRankApproximationState):
 
 
 def lwrk_hook(state: LowRankApproximationState, bucket):
+    """
+    Communication hook to attach to DDP model
+    Inspired by PowerSGD from Pytorch
+    """
     n_gpus = state.n_gpus
 
     input_tensor = bucket.buffer()
@@ -138,12 +161,15 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
 
     bucket_index = bucket.index()
 
+    # look at the gradients per layer
     tensors = bucket.gradients()
 
     tensors_to_compress, uncompressed_tensors = [], []
     total_Xs_size = 0
     total_Ys_size = 0
 
+    # decide which tensors to compress and save the memory
+    # for later
     for tensor in tensors:
         matrix = tensor.view(tensor.shape[0], -1)
         m, n = matrix.shape
@@ -155,25 +181,31 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
         else:
             uncompressed_tensors.append(tensor)
 
+    # these should be all reduced as normal
     uncompressed_tensors_memory = (
             torch.cat([tensor.view(-1) for tensor in uncompressed_tensors])
             if uncompressed_tensors
             else torch.tensor([], device=device, dtype=dtype)
             )
 
+    # l memory represents where the gathered
+    # U's will be stored after all gather
     l_memory = [
             torch.empty(
                 total_Ys_size, device=device, dtype=dtype) 
             for _ in range(n_gpus)
             ]
+    # V^T will be stored here after all gather
     r_memory = [
             torch.empty(
                 total_Xs_size, device=device, dtype=dtype)
             for _ in range(n_gpus)
             ]
+    # Storage for V^T's before all gather
     X_memory = torch.empty(
             total_Xs_size, device=device, dtype=dtype
             )
+    # Storage for U before all gather
     Y_memory = torch.empty(
             total_Ys_size, device=device, dtype=dtype
             )
@@ -233,6 +265,8 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
             uncompressed_tensors_memory, async_op=True
             ).get_future()
 
+    # perhaps could be improved by adding in all reduce
+    # of uncompressed tensors to wait_all
     def unpack_uncompressed_tensors_and_allgather_ls_and_rs(fut):
         uncompressed_tensors_memory = fut.value()[0].div_(n_gpus)
         idx = 0
@@ -262,9 +296,9 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
                 )
 
     def decompress_ls_and_rs(fut):
-        fut_list = fut.value()
-        l_memory = fut_list[0]
-        r_memory = fut_list[1]
+        # fut_list = fut.value()
+        # all gathered ls and rs are stored in ls, rs
+        # which refers to the memory of l_memory and r_memory
         for l, r, tensor in zip(ls, rs, tensors_to_compress):
             gathered_tensor = torch.matmul(
                     torch.cat(l, dim=-1), torch.cat(r, dim=-2)
@@ -295,6 +329,11 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
 
 
 def simple_lwrk_hook(state: LowRankApproximationState, bucket):
+    """
+    A simple alternative to lwrk_hook
+    which performs the same computation but does not
+    perform any compression
+    """
     input_tensor = bucket.buffer()
     state.cur_grad_norm += torch.norm(input_tensor)
     if bucket.is_last():

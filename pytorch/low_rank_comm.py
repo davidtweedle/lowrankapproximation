@@ -257,6 +257,9 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
         x_idx += batch_size * n * rank
 
     for i, tensor in enumerate(tensors_to_compress):
+        if device == torch.device('cuda:0') and state.global_step == 5:
+            logging.info(f"Gradient shape is {tensor.shape}\n")
+            logging.info(f"Gradient is sparse {tensor.is_sparse()}\n")
         U, Vh = low_rank_sketch(tensor, state)
         Ys[i].copy_(U)
         Xs[i].copy_(Vh)

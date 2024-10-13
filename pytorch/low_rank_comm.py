@@ -87,20 +87,20 @@ def svd_approximator(grad, upper_bound_rank, svd_rank, device, n_gpus):
     grad.div_(n_gpus)
     return grad
 
-def normalize_sv_approximator(grad, rank, device, n_gpus):
+def normalize_sv_approximator(grad, rank, device, n_gpus, niter):
     """
     Approximate the gradient by grad = U * V^T
     """
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
-    m, n, _ = *reshaped_grad.shape, 1
+    m, n = reshaped_grad.shape
     rank = min(m, n, rank)
     if min(m, n) > 1:
         try:
             U, _, V = torch.svd_lowrank(
                     reshaped_grad,
                     q=rank,
-                    niter=1
+                    niter=niter
                     )
             reshaped_grad = U @ V.transpose(-1, -2)
         except torch._C._LinAlgError as err:
@@ -339,10 +339,6 @@ def simple_lwrk_hook(state: LowRankApproximationState, bucket):
     perform any compression
     """
     input_tensor = bucket.buffer()
-    state.cur_grad_norm += torch.norm(input_tensor)
-    if bucket.is_last():
-        logging.info(f"Current grad norm is: {state.cur_grad_norm}")
-        state.cur_grad_norm = 0
     dtype = input_tensor.dtype
     device = input_tensor.device
     n_gpus = state.n_gpus
@@ -350,10 +346,11 @@ def simple_lwrk_hook(state: LowRankApproximationState, bucket):
     for grad in bucket.gradients():
         grad.copy_(
                 normalize_sv_approximator(
-                    grad.clone().detach(),
+                    grad.clone(),
                     rank,
                     device,
-                    n_gpus
+                    n_gpus,
+                    state.num_iter_svd
                     )
                 )
     state.maybe_increase_iter(bucket)    

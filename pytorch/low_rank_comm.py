@@ -303,11 +303,13 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
         # all gathered ls and rs are stored in ls, rs
         # which refers to the memory of l_memory and r_memory
         for l, r, tensor in zip(ls, rs, tensors_to_compress):
-            gathered_tensor = torch.matmul(
-                    torch.cat(l, dim=-1), torch.cat(r, dim=-2)
+            tensor.copy_(
+                    torch.matmul(
+                        torch.cat(l, dim=-1),
+                        torch.cat(r, dim=-2)
+                        )
                     )
-            gathered_tensor.div_(n_gpus)
-            tensor.copy_(gathered_tensor)
+            tensor.div_(n_gpus)
 
         if state.batch_tensors_with_same_shape:
             for tensor in tensors_to_compress:

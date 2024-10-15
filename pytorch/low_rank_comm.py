@@ -87,24 +87,26 @@ def svd_approximator(grad, upper_bound_rank, svd_rank, device, n_gpus):
     grad.div_(n_gpus)
     return grad
 
-def normalize_sv_approximator(grad, rank, device, n_gpus):
+def normalize_sv_approximator(grad, rank, device, n_gpus, niter):
     """
     Approximate the gradient by grad = U * V^T
     """
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
-    m, n, _ = *reshaped_grad.shape, 1
+    m, n = reshaped_grad.shape
     rank = min(m, n, rank)
     if min(m, n) > 1:
         try:
             U, _, V = torch.svd_lowrank(
                     reshaped_grad,
                     q=rank,
-                    niter=1
+                    niter=niter
                     )
             reshaped_grad = U @ V.transpose(-1, -2)
         except torch._C._LinAlgError as err:
             logging.info(f'SVD approximator threw error {err}')
+    else:
+        reshaped_grad.div_(torch.linalg.norm(reshaped_grad))
     grad = reshaped_grad.reshape(*oldshape)
     grad.div_(n_gpus)
     return grad
@@ -257,9 +259,8 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
         x_idx += batch_size * n * rank
 
     for i, tensor in enumerate(tensors_to_compress):
-        if device == torch.device('cuda:0') and state.global_step == 5:
+        if device == torch.device('cuda:0') and state.global_step == 0:
             logging.info(f"Gradient shape is {tensor.shape}\n")
-            logging.info(f"Gradient is sparse {tensor.is_sparse()}\n")
         U, Vh = low_rank_sketch(tensor, state)
         Ys[i].copy_(U)
         Xs[i].copy_(Vh)
@@ -303,11 +304,13 @@ def lwrk_hook(state: LowRankApproximationState, bucket):
         # all gathered ls and rs are stored in ls, rs
         # which refers to the memory of l_memory and r_memory
         for l, r, tensor in zip(ls, rs, tensors_to_compress):
-            gathered_tensor = torch.matmul(
-                    torch.cat(l, dim=-1), torch.cat(r, dim=-2)
+            tensor.copy_(
+                    torch.matmul(
+                        torch.cat(l, dim=-1),
+                        torch.cat(r, dim=-2)
+                        )
                     )
-            gathered_tensor.div_(n_gpus)
-            tensor.copy_(gathered_tensor)
+            tensor.div_(n_gpus)
 
         if state.batch_tensors_with_same_shape:
             for tensor in tensors_to_compress:
@@ -338,10 +341,6 @@ def simple_lwrk_hook(state: LowRankApproximationState, bucket):
     perform any compression
     """
     input_tensor = bucket.buffer()
-    state.cur_grad_norm += torch.norm(input_tensor)
-    if bucket.is_last():
-        logging.info(f"Current grad norm is: {state.cur_grad_norm}")
-        state.cur_grad_norm = 0
     dtype = input_tensor.dtype
     device = input_tensor.device
     n_gpus = state.n_gpus
@@ -349,10 +348,11 @@ def simple_lwrk_hook(state: LowRankApproximationState, bucket):
     for grad in bucket.gradients():
         grad.copy_(
                 normalize_sv_approximator(
-                    grad.clone().detach(),
+                    grad.clone(),
                     rank,
                     device,
-                    n_gpus
+                    n_gpus,
+                    state.num_iter_svd
                     )
                 )
     state.maybe_increase_iter(bucket)    

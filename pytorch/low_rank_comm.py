@@ -105,7 +105,7 @@ def normalize_sv_approximator(grad, rank, device, n_gpus, niter):
                     )
             reshaped_grad = U @ V.transpose(-1, -2)
         except torch._C._LinAlgError as err:
-            raise TrainingCompleteError()
+            raise TrainingCompleteError
     else:
         reshaped_grad.div_(torch.linalg.norm(reshaped_grad))
     grad = reshaped_grad.reshape(*oldshape)

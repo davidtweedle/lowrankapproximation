@@ -44,7 +44,6 @@ class LowRankApproximationState:
         self.batch_tensors_with_same_shape = batch_tensors_with_same_shape
         self.eps = eps
         self.global_step = global_step
-        self.cur_grad_norm = 0
         self.num_iter_svd = num_iter_svd
         self.num_errs = 0
 

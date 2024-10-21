@@ -23,8 +23,8 @@ class LowRankApproximationState:
             "batch_tensors_with_same_shape",
             "eps",
             "global_step",
-            "cur_grad_norm",
-            "num_iter_svd"
+            "num_iter_svd",
+            "num_errs"
             ]
 
     def __init__(
@@ -36,6 +36,7 @@ class LowRankApproximationState:
             batch_tensors_with_same_shape: bool = True,
             global_step=0,
             num_iter_svd=0,
+            num_errs=0
             ):
         self.n_gpus = n_gpus
         self.matrix_approximation_rank = matrix_approximation_rank
@@ -45,6 +46,7 @@ class LowRankApproximationState:
         self.global_step = global_step
         self.cur_grad_norm = 0
         self.num_iter_svd = num_iter_svd
+        self.num_errs = 0
 
     def __getstate__(self):
         return {
@@ -59,6 +61,9 @@ class LowRankApproximationState:
     def maybe_increase_iter(self, bucket):
         if bucket.is_last():
             self.global_step += 1
+
+    def inc_num_errs(self):
+        self.num_errs += 1
 
 def svd_approximator(grad, upper_bound_rank, svd_rank, device, n_gpus):
     """
@@ -88,14 +93,17 @@ def svd_approximator(grad, upper_bound_rank, svd_rank, device, n_gpus):
     grad.div_(n_gpus)
     return grad
 
-def normalize_sv_approximator(grad, rank, device, n_gpus, niter):
+def normalize_sv_approximator(grad, state):
     """
     Approximate the gradient by grad = U * V^T
     """
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
     m, n = reshaped_grad.shape
+    rank = state.matrix_approximation_rank
+    niter = state.num_iter_svd
     rank = min(m, n, rank)
+    n_gpus = state.n_gpus
     if min(m, n) > 1:
         try:
             U, _, V = torch.svd_lowrank(
@@ -104,8 +112,8 @@ def normalize_sv_approximator(grad, rank, device, n_gpus, niter):
                     niter=niter
                     )
             reshaped_grad = U @ V.transpose(-1, -2)
-        except torch._C._LinAlgError as err:
-            raise TrainingCompleteError
+        except torch._C._LinAlgError:
+            state.inc_num_errs()
     else:
         reshaped_grad.div_(torch.linalg.norm(reshaped_grad))
     grad = reshaped_grad.reshape(*oldshape)
@@ -342,18 +350,11 @@ def simple_lwrk_hook(state: LowRankApproximationState, bucket):
     perform any compression
     """
     input_tensor = bucket.buffer()
-    dtype = input_tensor.dtype
-    device = input_tensor.device
-    n_gpus = state.n_gpus
-    rank = state.matrix_approximation_rank
     for grad in bucket.gradients():
         grad.copy_(
                 normalize_sv_approximator(
                     grad.clone(),
-                    rank,
-                    device,
-                    n_gpus,
-                    state.num_iter_svd
+                    state
                     )
                 )
     state.maybe_increase_iter(bucket)    

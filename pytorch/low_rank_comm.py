@@ -24,7 +24,8 @@ class LowRankApproximationState:
             "eps",
             "global_step",
             "num_iter_svd",
-            "num_errs"
+            "num_errs",
+            "n_valid_examples"
             ]
 
     def __init__(
@@ -46,6 +47,7 @@ class LowRankApproximationState:
         self.global_step = global_step
         self.num_iter_svd = num_iter_svd
         self.num_errs = 0
+        self.n_valid_examples = [torch.tensor(0) for _ in range(n_gpus)]
 
     def __getstate__(self):
         return {
@@ -96,6 +98,11 @@ def normalize_sv_approximator(grad, state):
     """
     Approximate the gradient by grad = U * V^T
     """
+    n_valid_examples = sum(state.n_valid_examples)
+    device = grad.get_device()
+    local_n_valid_examples = state.n_valid_examples[device]
+    weight = local_n_valid_examples / n_valid_examples
+
     oldshape = grad.shape
     reshaped_grad = grad.reshape(oldshape[0], -1)
     m, n = reshaped_grad.shape
@@ -116,7 +123,7 @@ def normalize_sv_approximator(grad, state):
     else:
         reshaped_grad.div_(torch.linalg.norm(reshaped_grad))
     grad = reshaped_grad.reshape(*oldshape)
-    grad.div_(n_gpus)
+    grad.mul_(weight)
     # must still divide by n_gpus
     # because dropping singular values normalizes gradients
     return grad

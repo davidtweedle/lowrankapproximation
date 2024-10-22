@@ -37,7 +37,8 @@ class LowRankApproximationState:
             batch_tensors_with_same_shape: bool = True,
             global_step=0,
             num_iter_svd=0,
-            num_errs=0
+            num_errs=0,
+            n_valid_examples=[]
             ):
         self.n_gpus = n_gpus
         self.matrix_approximation_rank = matrix_approximation_rank
@@ -47,7 +48,7 @@ class LowRankApproximationState:
         self.global_step = global_step
         self.num_iter_svd = num_iter_svd
         self.num_errs = 0
-        self.n_valid_examples = [torch.tensor(0) for _ in range(n_gpus)]
+        self.n_valid_examples = n_valid_examples
 
     def __getstate__(self):
         return {
@@ -124,8 +125,6 @@ def normalize_sv_approximator(grad, state):
         reshaped_grad.div_(torch.linalg.norm(reshaped_grad))
     grad = reshaped_grad.reshape(*oldshape)
     grad.mul_(weight)
-    # must still divide by n_gpus
-    # because dropping singular values normalizes gradients
     return grad
 
 

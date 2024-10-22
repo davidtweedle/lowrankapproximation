@@ -116,10 +116,9 @@ def normalize_sv_approximator(grad, state):
     else:
         reshaped_grad.div_(torch.linalg.norm(reshaped_grad))
     grad = reshaped_grad.reshape(*oldshape)
-    # grad.div_(n_gpus)
-    # don't divide by n_gpus because we have already divided by 
-    # n_valid_examples in pytorch_momentum_lwrk.py
-    # hopefully this should correct error for wmt
+    grad.div_(n_gpus)
+    # must still divide by n_gpus
+    # because dropping singular values normalizes gradients
     return grad
 
 

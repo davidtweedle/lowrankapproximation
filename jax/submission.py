@@ -47,7 +47,7 @@ HPARAMS = {
         'rank_type': 'sqrt',    # or 'constant', decides what dimension to sketch
         'rank': None        # if 'rank_type'='constant', then what rank to use
         }
-        
+
 _GRAD_CLIP_EPS = 1e-6
 
 class AugmentedShapeInfo(NamedTuple):
@@ -77,7 +77,7 @@ def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """
     if len(weight_shape) <= 2:
         return weight_shape
-    
+
     first_dim = weight_shape[0]
     rest_dim = int(jnp.prod(jnp.array(weight_shape[1:])))
     return (first_dim, rest_dim)
@@ -216,7 +216,7 @@ def create_inv_transform_shapes():
         shape_info = state
 
         def unaugment_update(upd, info):
-            
+
             m, n = info.reshaped_2d
             res_dict = {}
             if info.maybe_transpose:
@@ -270,7 +270,7 @@ def create_svd_args(
     return key_tree, rank_tree
 
 class ScaleByLowRankOrthogonalUpdateState(NamedTuple):
-  """State for the Low Rank Orthogonal Update algorithm.
+    """State for the Low Rank Orthogonal Update algorithm.
   """
   step: chex.Array          # number of steps
   momentum: Any             # Pytree storing momentum of parameter
@@ -290,10 +290,10 @@ def low_rank_orthogonal_update(
         eps_root=0.0,
         weight_decay=0.0,
         mask=None):
-  r"""
+    r"""
 
     Args:
-        
+
     Returns:
         The corresponding `GradientTransformation`.
   """
@@ -331,20 +331,20 @@ def low_rank_orthogonal_update(
 
 
 
-def scale_by_low_rank_orthogonal_update(
-        key: int,
-        beta1: float = 0.9, 
-        krylov_iter: int = 2, 
-        rank_type: str = 'sqrt', 
-        rank_val: Optional[int] = None,
-        eps=1e-8,
-        ):
-    """
+  def scale_by_low_rank_orthogonal_update(
+          key: int,
+          beta1: float = 0.9, 
+          krylov_iter: int = 2, 
+          rank_type: str = 'sqrt', 
+          rank_val: Optional[int] = None,
+          eps=1e-8,
+          ):
+      """
     Scale gradients using low-rank SVD-based orthogonal updates
 
     This optimizer maintains momentum and applies preconditioned updates
     via randomized SVD.
-    
+
     Args:
         key: Random key for sketching method
         beta1: Momentum parameter (default: 0.9)
@@ -396,55 +396,55 @@ def scale_by_low_rank_orthogonal_update(
 
 
 def _update_moment(updates, moments, decay, order):
-  """Compute the exponential moving average of the `order`-th moment."""
+    """Compute the exponential moving average of the `order`-th moment."""
   return jax.tree.map(
-      lambda g, t: (1 - decay) * (g ** order) + decay * t, updates, moments)
+          lambda g, t: (1 - decay) * (g ** order) + decay * t, updates, moments)
 
 
-def train_step(workload,
-               opt_update_fn,
-               model_state,
-               optimizer_state,
-               current_param_container,
-               batch,
-               rng,
-               grad_clip,
-               label_smoothing,
-               dropout_rate,
-               ):
+  def train_step(workload,
+                 opt_update_fn,
+                 model_state,
+                 optimizer_state,
+                 current_param_container,
+                 batch,
+                 rng,
+                 grad_clip,
+                 label_smoothing,
+                 dropout_rate,
+                 ):
 
-  def _loss_fn(params):
-    """Loss function used for training."""
+      def _loss_fn(params):
+          """Loss function used for training."""
     logits, new_model_state = workload.model_fn(
-        params,
-        batch,
-        model_state,
-        spec.ForwardPassMode.TRAIN,
-        rng,
-        update_batch_norm=True,
-        dropout_rate=dropout_rate,
-        )
+            params,
+            batch,
+            model_state,
+            spec.ForwardPassMode.TRAIN,
+            rng,
+            update_batch_norm=True,
+            dropout_rate=dropout_rate,
+            )
     loss_dict = workload.loss_fn(
-        label_batch=batch['targets'],
-        logits_batch=logits,
-        mask_batch=batch.get('weights'),
-        label_smoothing=label_smoothing)
+            label_batch=batch['targets'],
+            logits_batch=logits,
+            mask_batch=batch.get('weights'),
+            label_smoothing=label_smoothing)
     summed_loss = loss_dict['summed']
     n_valid_examples = loss_dict['n_valid_examples']
     return summed_loss, (n_valid_examples, new_model_state)
 
-  grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
+grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
   (summed_loss, (n_valid_examples, new_model_state)), grad = grad_fn(
-      current_param_container)
+          current_param_container)
   # Get correct global mean loss and grad.
   loss = summed_loss / n_valid_examples
   grad = jax.tree.map(lambda x: x / n_valid_examples, grad)
 
   grad_norm = jnp.sqrt(
-      sum(jnp.sum(g**2) for g in jax.tree_util.tree_leaves(grad)))
+          sum(jnp.sum(g**2) for g in jax.tree_util.tree_leaves(grad)))
 
   if grad_clip is not None:
-    grad_scaling_factor = grad_clip / (grad_norm + _GRAD_CLIP_EPS)
+      grad_scaling_factor = grad_clip / (grad_norm + _GRAD_CLIP_EPS)
     grad_scaling_factor = jax.lax.clamp(min=0.0, x=grad_scaling_factor, max=1.0)
     grad = jax.tree.map(lambda x: x * grad_scaling_factor, grad)
 
@@ -455,19 +455,19 @@ def train_step(workload,
 
 
 def update_params(
-    workload: spec.Workload,
-    current_param_container: spec.ParameterContainer,
-    current_params_types: spec.ParameterTypeTree,
-    model_state: spec.ModelAuxiliaryState,
-    hyperparameters: spec.Hyperparameters,
-    batch: Dict[str, spec.Tensor],
-    loss_type: spec.LossType,
-    optimizer_state: spec.OptimizerState,
-    eval_results: List[Tuple[int, float]],
-    global_step: int,
-    rng: spec.RandomState,
-    train_state: Optional[Dict[str, Any]] = None) -> spec.UpdateReturn:
-  """Return (updated_optimizer_state, updated_params, updated_model_state)."""
+        workload: spec.Workload,
+        current_param_container: spec.ParameterContainer,
+        current_params_types: spec.ParameterTypeTree,
+        model_state: spec.ModelAuxiliaryState,
+        hyperparameters: spec.Hyperparameters,
+        batch: Dict[str, spec.Tensor],
+        loss_type: spec.LossType,
+        optimizer_state: spec.OptimizerState,
+        eval_results: List[Tuple[int, float]],
+        global_step: int,
+        rng: spec.RandomState,
+        train_state: Optional[Dict[str, Any]] = None) -> spec.UpdateReturn:
+    """Return (updated_optimizer_state, updated_params, updated_model_state)."""
   del current_params_types
   del loss_type
   del train_state
@@ -478,15 +478,15 @@ def update_params(
 
   optimizer_state, opt_update_fn = optimizer_state
   if 'label_smoothing' in hyperparameters:
-    label_smoothing = hyperparameters['label_smoothing']
+      label_smoothing = hyperparameters['label_smoothing']
   else:
-    label_smoothing = 0.0
+      label_smoothing = 0.0
   if 'grad_clip' in hyperparameters:
-    grad_clip = hyperparameters['grad_clip']
+      grad_clip = hyperparameters['grad_clip']
   else:
-    grad_clip = None
+      grad_clip = None
   dropout_rate = hyperparameters['dropout_rate']
-  
+
   # mesh = jax.sharding.Mesh(jax.devices(), ('batch'))
   replicated = jax_sharding_utils.get_replicate_sharding()
   sharded = (
@@ -531,11 +531,11 @@ def update_params(
 
   # Log loss, grad_norm.
   if global_step % 100 == 0 and workload.metrics_logger is not None:
-    workload.metrics_logger.append_scalar_metrics(
-        {
-            'loss': loss,
-            'grad_norm': grad_norm,
-        }, global_step)
+      workload.metrics_logger.append_scalar_metrics(
+              {
+                  'loss': loss,
+                  'grad_norm': grad_norm,
+                  }, global_step)
   return (new_optimizer_state, opt_update_fn), new_params, new_model_state
 
 

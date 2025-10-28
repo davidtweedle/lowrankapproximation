@@ -281,6 +281,7 @@ class ScaleByLowRankOrthogonalUpdateState(NamedTuple):
 
 def low_rank_orthogonal_update(
         lr,
+        key,
         beta1,
         beta2,
         krylov_iter,
@@ -305,6 +306,7 @@ def low_rank_orthogonal_update(
                 'low_rank_orthogonal_update': optax.chain(
                     transform_shapes,
                     scale_by_low_rank_orthogonal_update(
+                        key=key,
                         beta1=beta1,
                         krylov_iter=krylov_iter,
                         rank_type=rank_type,
@@ -631,9 +633,11 @@ def init_optimizer_state(
         rank_val = HPARAMS['rank']
     else:
         rank_val = None
+    print(rng)
 
 
     opt_init_fn, opt_update_fn = low_rank_orthogonal_update(
+            key=rng,
             lr=lr,
             beta1=beta1,
             beta2=beta2,

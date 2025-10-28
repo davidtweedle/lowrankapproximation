@@ -632,7 +632,8 @@ def init_optimizer_state(
         rank_val = HPARAMS['rank']
     else:
         rank_val = None
-    print(rng)
+    print(rng, rng.shape)
+    rng, key = jax.random.split(rng)
 
 
     opt_init_fn, opt_update_fn = low_rank_orthogonal_update(

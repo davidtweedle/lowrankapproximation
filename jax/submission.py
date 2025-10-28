@@ -237,9 +237,9 @@ def create_inv_transform_shapes():
 
 def create_svd_args(
         params,
+        key: int,
         rank_type: str,
         rank: Optional[int] = None,
-        key: jax.random.PRNGKey,
         ):
     """
     Return key Pytree and rank Pytree
@@ -363,7 +363,7 @@ def scale_by_low_rank_orthogonal_update(
       momentum = jax.tree.map(
               jnp.zeros_like, params
               )
-      key, rank = create_svd_args(params, rank_type, rank, key)
+      key, rank = create_svd_args(params, key, rank_type, rank)
       return ScaleByLowRankOrthogonalUpdateState(
               step=jnp.zeros([], jnp.int32),
               momentum=momentum,

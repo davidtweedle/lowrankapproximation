@@ -319,8 +319,8 @@ def low_rank_orthogonal_update(
                     ),
                 'adam': optax.nadamw(
                     learning_rate=lr,
-                    beta1=beta1,
-                    beta2=beta2,
+                    b1=beta1,
+                    b2=beta2,
                     eps=eps,
                     eps_root=eps_root,
                     weight_decay=weight_decay,

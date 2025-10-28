@@ -619,7 +619,6 @@ def init_optimizer_state(
         ) -> spec.OptimizerState:
     del model_params
     del model_state
-    del rng
     params_zeros_like = jax.tree.map(
             lambda s: jnp.zeros(s.shape_tuple), workload.param_shapes
             )

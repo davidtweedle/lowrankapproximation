@@ -278,6 +278,42 @@ class ScaleByLowRankOrthogonalUpdateState(NamedTuple):
     key: Any                  # random key Pytree
     rank: Any                 # Pytree containing rank parameter for low rank svd
 
+def create_optimizer_sharding(optimizer_state, replicated, sharded):
+    """
+    Create sharding spec for optimizer
+
+    Args:
+        optimizer_state: The optimizer state structure
+        replicated: Sharding spec for replicated data
+        sharded: Sharding spec for batch sharded data
+
+    Returns:
+        Sharding spec sharding rng key across batches and replicating
+        all other optimizer variables
+    """
+    def shard_optimizer_component(state_component):
+        if isinstance(state_component, ScaleByLowRankOrthogonalUpdateState):
+            return ScaleByLowRankOrthogonalUpdateState(
+                    step=replicated,
+                    momentum=jax.tree.map(lambda _: replicated, state_component.momentum),
+                    krylov_iter=replicated,
+                    key=jax.tree.map(lambda _: sharded, state_component.key),
+                    rank=jax.tree.map(lambda _: replicated, state_component.rank)
+                    )
+        else:
+            return jax.tree.map(lambda _: replicated, state_component)
+
+    return jax.tree.map(
+            shard_optimizer_component,
+            optimizer_state,
+            is_leaf=lambda x: (
+                isinstance(x, ScaleByLowRankOrthogonalUpdateState) or
+                (
+                    hasattr(x, '_fields') and
+                    not isinstance(x, ScaleByLowRankOrthogonalUpdateState)
+                    )
+                )
+            )
 
 def low_rank_orthogonal_update(
         lr,
@@ -493,9 +529,14 @@ def update_params(
     sharded = (
             jax_sharding_utils.get_batch_dim_sharding()
             )
+    optimizer_sharding_spec = create_optimizer_sharding(
+            optimizer_state, replicated=replicated, sharded=sharded
+            )
+
+
     arg_shardings = (
             replicated, #model_state
-            replicated, #optimizer_state # change to optimizer sharding eventually
+            optimizer_sharding_spec, #optimizer_state # change to optimizer sharding eventually
             replicated, # current_param_container
             sharded, # batch
             replicated, # per_device_rngs
@@ -504,7 +545,7 @@ def update_params(
             replicated, #dropout_rate
             )
     out_shardings = (
-            replicated, # new_optimizer_state # maybe sharded eventually
+            optimizer_sharding_spec, # new_optimizer_state # maybe sharded eventually
             replicated, # updated_params
             replicated, # new_model_state
             replicated, # loss
@@ -632,8 +673,6 @@ def init_optimizer_state(
         rank_val = HPARAMS['rank']
     else:
         rank_val = None
-    print(rng, rng.shape)
-    rng, key = jax.random.split(rng)
 
 
     opt_init_fn, opt_update_fn = low_rank_orthogonal_update(

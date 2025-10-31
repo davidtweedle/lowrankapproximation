@@ -401,13 +401,13 @@ def scale_by_low_rank_orthogonal_update(
         momentum = jax.tree.map(
                 jnp.zeros_like, params
                 )
-        key, rank = create_svd_args(params, key, rank_type, rank)
+        key_tree, rank_tree = create_svd_args(params, key, rank_type, rank)
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
                 momentum=momentum,
                 krylov_iter=krylov_iter,
-                rank=rank,
-                key=key
+                rank=rank_tree,
+                key=key_tree
                 )
 
     def update_fn(updates, state, params=None):

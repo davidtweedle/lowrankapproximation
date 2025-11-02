@@ -667,7 +667,7 @@ def init_optimizer_state(
     else:
         rank_val = None
 
-    labels = create_param_labels()(param_zeros_like)
+    labels = create_param_labels()(params_zeros_like)
 
 
     opt_init_fn, opt_update_fn = low_rank_orthogonal_update(

@@ -178,9 +178,10 @@ def svd_lowrank(
     Q = get_approximate_basis(x, key, d, niter)
     # returns an orthogonal m-by-(niter + 1) * d matrix
     B = Q.T @ x
-    U, _, Vh = jnp.linalg.svd(B, full_matrices=False)
-    U = Q @ U
-    return U @ Vh
+    Ub, _, Vh = jnp.linalg.svd(B, full_matrices=False)
+    U = Q @ Ub
+    update = U @ Vh
+    return update
 
 def get_approximate_basis(
         x: jnp.ndarray,
@@ -193,14 +194,17 @@ def get_approximate_basis(
     Uses gaussian random matrix
     '''
     m, n = x.shape
-    R = jnp.random.normal(key=key, shape=(n, d))
-    X = jnp.zeros(shape=(m, d * (niter + 1)), dtype=x.dtype, device=x.device)
-    B = x @ R
-    X = X.at[:, :d].set(B)
+    d = int(min(d, m, n))
+    R = jax.random.normal(key=key, shape=(n, d))
+    Y = x @ R
+    Q, _ = jnp.linalg.qr(Y, mode='reduced')
 
-    for i in range(niter):
-        B = x.T @ B
-        B = x @ B
-        X = X.at[:, (i + 1) * d : (i + 2) * d].set(B)
-    Q = jnp.linalg.qr(X, mode='reduced').Q
+    def body(_, Qcur):
+        Z = x @ Qcur
+        Qt, _ = jnp.linalg.qr(Z, mode='reduced')
+        Y = x @ Qt
+        Qnew, _ = jnp.linalg.qr(Y, mode='reduced')
+        return Qnew
+
+    Q = lax.fori_loop(0, int(niter), body, Q)
     return Q

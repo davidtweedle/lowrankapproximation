@@ -206,7 +206,6 @@ class ScaleByLowRankOrthogonalUpdateState:
     step: chex.Array          # number of steps
     shape_info: Any = struct.field(pytree_node=False)           # Pytree of AugmentedShapeInfo
     momentum: Any             # Pytree storing momentum of parameter
-    krylov_iter: chex.Array   # number of krylov iterations
     key: Any                  # random key Pytree
     rank: Any                 # Pytree containing rank parameter for low rank svd
 
@@ -229,7 +228,6 @@ def create_optimizer_sharding(optimizer_state, replicated, sharded):
                     step=replicated,
                     shape_info=replicated,
                     momentum=jax.tree.map(lambda _: replicated, state_component.momentum),
-                    krylov_iter=replicated,
                     key=jax.tree.map(lambda _: sharded, state_component.key),
                     rank=jax.tree.map(lambda _: replicated, state_component.rank)
                     )
@@ -361,6 +359,7 @@ def scale_by_low_rank_orthogonal_update(
     Note:
     Assumes params are matrices
     """
+    k_iter: int = int(krylov_iter)
     def init_fn(params):
         shape_info = _compute_shape_info(params)
 
@@ -384,7 +383,6 @@ def scale_by_low_rank_orthogonal_update(
                 step=jnp.zeros([], jnp.int32),
                 shape_info=shape_info,
                 momentum=momentum,
-                krylov_iter=krylov_iter,
                 rank=rank_tree,
                 key=key_tree
                 )
@@ -405,7 +403,7 @@ def scale_by_low_rank_orthogonal_update(
                 state.momentum
                 )
         aug_precond = jax.tree.map(
-                lambda m, k, r: None if m is None else linalg.svd_lowrank(m, k, r, int(state.krylov_iter)),
+                lambda m, k, r: None if m is None else linalg.svd_lowrank(m, k, r, k_iter),
                 new_momentum,
                 use_key,
                 state.rank
@@ -415,7 +413,6 @@ def scale_by_low_rank_orthogonal_update(
                 step=step_inc,
                 shape_info=state.shape_info,
                 momentum=new_momentum,
-                krylov_iter=state.krylov_iter,
                 key=new_key,
                 rank=state.rank
                 )

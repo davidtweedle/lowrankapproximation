@@ -57,13 +57,13 @@ class AugmentedShapeInfo:
     """
     Class to keep track of transformations between 'kernel', 'bias' pairs and augmented matrix
     """
-    kernel_name: str                # name of kernel weight
-    kernel_shape: tuple             # shape of original kernel tensor
-    bias_name: Optional[str]        # name of bias weight
-    bias_shape: Optional[tuple]     # shape of original bias tensor
-    reshaped_2d: tuple          # shape of kernel reshaped as matrix
-    maybe_transpose: bool       # whether the augmented matrix should be transposed
-    augmented_shape: tuple      # final shape of augmented matrix (after transposing)
+    kernel_name: str            = struct.field(pytree_node=False)    # name of kernel weight
+    kernel_shape: tuple         = struct.field(pytree_node=False)    # shape of original kernel tensor
+    bias_name: Optional[str]    = struct.field(pytree_node=False)    # name of bias weight
+    bias_shape: Optional[tuple] = struct.field(pytree_node=False)     # shape of original bias tensor
+    reshaped_2d: tuple          = struct.field(pytree_node=False)# shape of kernel reshaped as matrix
+    maybe_transpose: bool       = struct.field(pytree_node=False)# whether the augmented matrix should be transposed
+    augmented_shape: tuple      = struct.field(pytree_node=False)# final shape of augmented matrix (after transposing)
 
 def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
@@ -199,12 +199,12 @@ def _compute_rank_tree(
             is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
             )
 
-    
+@struct.dataclass    
 class ScaleByLowRankOrthogonalUpdateState(NamedTuple):
     """State for the Low Rank Orthogonal Update algorithm.
     """
     step: chex.Array          # number of steps
-    shape_info: Any           # Pytree of AugmentedShapeInfo
+    shape_info: Any = struct.field(pytree_node=False)           # Pytree of AugmentedShapeInfo
     momentum: Any             # Pytree storing momentum of parameter
     krylov_iter: chex.Array   # number of krylov iterations
     key: Any                  # random key Pytree

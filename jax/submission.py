@@ -69,6 +69,9 @@ class AugmentedShapeInfo:
 def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
+def _is_weight_block(x):
+    return isinstance(x, dict) and any(k in x for k in ('kernel', 'embedding', 'embedding_table')
+
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """
     Calculate shape of weight as a matrix
@@ -140,11 +143,7 @@ def _compute_shape_info(params):
     return jax.tree.map(
             classify_subtree,
             params,
-            is_leaf=lambda x: isinstance(x, dict) and (
-                'kernel' in x or
-                'embedding' in x or
-                'embedding_table' in x
-                )
+            is_leaf=_is_weight_block
             )
 
 def create_param_labels() -> Callable:
@@ -251,7 +250,7 @@ def create_optimizer_sharding(optimizer_state, replicated, sharded):
 
 def _augment_tree(updates, shape_info):
     def _augment(upd_sub, info):
-        if info is None:
+        if info is None or isinstance(info, dict):
             return None
         k2d = upd_sub[info.kernel_name].reshape(info.reshaped_2d)
         if info.bias_name is not None:
@@ -262,12 +261,12 @@ def _augment_tree(updates, shape_info):
         return mat.T if info.maybe_transpose else mat
     return jax.tree.map(
             _augment, updates, shape_info,
-            is_leaf=lambda x: isinstance(x, dict) or (x is None) or isinstance(x, AugmentedShapeInfo)
+            is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
             )
 
 def _unaugment_tree(aug_updates, shape_info):
     def _unaugment(aug, info):
-        if info is None:
+        if info is None or isinstance(info, dict):
             return aug
         mat = aug.T if info.maybe_transpose else aug
         m, n = info.reshaped_2d
@@ -277,7 +276,7 @@ def _unaugment_tree(aug_updates, shape_info):
         return out
     return jax.tree.map(
             _unaugment, aug_updates, shape_info,
-            is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
+            is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
             )
 
 def low_rank_orthogonal_update(

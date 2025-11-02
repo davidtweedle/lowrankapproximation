@@ -83,7 +83,7 @@ def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
         tuple: (first_dim, product_of_remaining_dims) or original shape if matrix
     """
     if len(weight_shape) <= 2:
-        return tuple(weight_shape)
+        return tuple(int(d) for d in weight_shape)
 
     first_dim = int(weight_shape[0])
     rest_dim = int(math.prod(int(d) for d in weight_shape[1:]))
@@ -184,9 +184,9 @@ def _compute_rank_tree(
     def pick_rank(info):
         if info is None: return None
         m, n = info.reshaped_2d
-        rmax = min(m, n)
+        rmax = min(int(m), int(n))
         if rank_type == 'sqrt':
-            r = int(jnp.sqrt(rmax))
+            r = int(math.sqrt(rmax))
         elif rank_type == 'constant':
             if rank_val is None:
                 raise ValueError("rank_val must be set when rank_type='constant'.")

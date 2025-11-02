@@ -28,6 +28,8 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from flax import struct
+
 from . import linalg
 
 from algoperf import spec, jax_sharding_utils
@@ -50,17 +52,18 @@ HPARAMS = {
 
 _GRAD_CLIP_EPS = 1e-6
 
-class AugmentedShapeInfo(NamedTuple):
+@struct.dataclass
+class AugmentedShapeInfo:
     """
     Class to keep track of transformations between 'kernel', 'bias' pairs and augmented matrix
     """
-    kernel_name: str        # name of kernel weight
-    kernel_shape: tuple     # shape of original kernel tensor
-    bias_name: str          # name of bias weight
-    bias_shape: tuple       # shape of original bias tensor
-    reshaped_2d: tuple      # shape of kernel reshaped as matrix
-    maybe_transpose: bool   # whether the augmented matrix should be transposed
-    augmented_shape: tuple  # final shape of augmented matrix (after transposing)
+    kernel_name: str                # name of kernel weight
+    kernel_shape: tuple             # shape of original kernel tensor
+    bias_name: Optional[str]        # name of bias weight
+    bias_shape: Optional[tuple]     # shape of original bias tensor
+    reshaped_2d: tuple          # shape of kernel reshaped as matrix
+    maybe_transpose: bool       # whether the augmented matrix should be transposed
+    augmented_shape: tuple      # final shape of augmented matrix (after transposing)
 
 def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
@@ -118,7 +121,8 @@ def _compute_shape_info(params):
             reshaped_2d = _reshape_to_2d(kernel_shape, bias_shape)
             m, n = reshaped_2d
             maybe_transpose = m < n
-            augmented_shape = (n + 1, m) if maybe_transpose else (m, n + 1)
+            extra = 1 if bias_name is not None else 0
+            augmented_shape = (n + extra, m) if maybe_transpose else (m, n + extra)
 
             return AugmentedShapeInfo(
                     kernel_shape=kernel_shape,
@@ -170,109 +174,37 @@ def create_param_labels() -> Callable:
                 )
     return param_labels
 
-def create_transform_shapes():
-    """
-    Create a transform `optimizer' which transforms updates into their augmented matrix shape
-    """
 
-    def init_fn(params):
-        shape_info = _compute_shape_info(params)
-        return shape_info
 
-    def update_fn(updates, state, params=None):
-        del params
-        shape_info = state
-
-        def augment_update(upd, info):
-            kernel_upd = upd[info.kernel_name]
-            kernel_2d = kernel_upd.reshape(info.reshaped_2d)
-            if info.bias_name is not None:
-                bias_row = upd[info.bias_name]
-                bias_2d = bias_row.reshape(1, -1)
-                augment_kernel = jnp.concatenate([kernel_2d, bias_2d], axis=0)
-            else:
-                augment_kernel = kernel_2d
-            return augment_kernel
-        transformed = jax.tree.map(
-                augment_update,
-                updates,
-                shape_info,
-                is_leaf=lambda x: isinstance(x, dict) or x is None or _is_shape_info(x)
-                )
-        return transformed, state
-    return optax.GradientTransformation(init_fn, update_fn)
-
-def create_inv_transform_shapes():
-    """
-    Create inverse function to function created by create_transform_shapes()
-    """
-
-    def init_fn(params):
-        shape_info = _compute_shape_info(params)
-        return shape_info
-
-    def update_fn(updates, state, params=None):
-        del params
-        shape_info = state
-
-        def unaugment_update(upd, info):
-
-            m, n = info.reshaped_2d
-            res_dict = {}
-            if info.maybe_transpose:
-                upd = upd.T
-            weight_2d = upd[:m]
-            res_dict[info.kernel_name] = weight_2d.reshape(info.kernel_shape)
-            if info.bias_shape is not None:
-                res_dict[info.bias_name] = upd[-1].flatten()
-            return res_dict
-        untransformed = jax.tree.map(
-                unaugment_update,
-                updates,
-                shape_info,
-                is_leaf=lambda x: x is None or _is_shape_info(x)
-                )
-        return untransformed, state
-    return optax.GradientTransformation(init_fn, update_fn)
-
-def create_svd_args(
-        params,
-        key: int,
+def _compute_rank_tree(
+        shape_info,
         rank_type: str,
-        rank: Optional[int] = None,
+        rank_val: Optional[int] = None,
         ):
-    """
-    Return key Pytree and rank Pytree
-    """
-    def compute_rank(param_shape):
-        if len(param_shape) != 2:
-            return None
-        m, n = param_shape
-
+    def pick_rank(info):
+        if info is None: return None
+        m, n = info.reshaped_2d
+        rmax = min(m, n)
         if rank_type == 'sqrt':
-            rank = int(jnp.sqrt(min(m, n)))
+            r = int(jnp.sqrt(rmax))
         elif rank_type == 'constant':
-            if rank is None:
-                raise ValueError("rank must be specified when rank_type=='constant'")
-            rank = min(rank, min(m, n))
+            if rank_val is None:
+                raise ValueError("rank_val must be set when rank_type='constant'.")
+            r = int(min(rank_val, rmax))
         else:
-            raise ValueError(f"Unknown rank_type: {rank_type}")
-        rank = max(1, min(rank, min(m, n)))
-        return rank
-
-    _, treedef = jax.tree.flatten(params)
-    keys = jax.random.split(key, treedef.num_leaves)
-    key_tree = jax.tree.unflatten(treedef, keys)
-    rank_tree = jax.tree.map(
-            lambda p: compute_rank(p.shape) if hasattr(p, 'shape') else None,
-            params
+            raise ValueError(f"Unknown rank_type: {rank_type}.")
+        return max(1, r)
+    return jax.tree.map(
+            pick_rank, shape_info,
+            is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
             )
-    return key_tree, rank_tree
 
+    
 class ScaleByLowRankOrthogonalUpdateState(NamedTuple):
     """State for the Low Rank Orthogonal Update algorithm.
     """
     step: chex.Array          # number of steps
+    shape_info: Any           # Pytree of AugmentedShapeInfo
     momentum: Any             # Pytree storing momentum of parameter
     krylov_iter: chex.Array   # number of krylov iterations
     key: Any                  # random key Pytree
@@ -295,6 +227,7 @@ def create_optimizer_sharding(optimizer_state, replicated, sharded):
         if isinstance(state_component, ScaleByLowRankOrthogonalUpdateState):
             return ScaleByLowRankOrthogonalUpdateState(
                     step=replicated,
+                    shape_info=replicated,
                     momentum=jax.tree.map(lambda _: replicated, state_component.momentum),
                     krylov_iter=replicated,
                     key=jax.tree.map(lambda _: sharded, state_component.key),
@@ -313,6 +246,37 @@ def create_optimizer_sharding(optimizer_state, replicated, sharded):
                     not isinstance(x, ScaleByLowRankOrthogonalUpdateState)
                     )
                 )
+            )
+
+def _augment_tree(updates, shape_info):
+    def _augment(upd_sub, info):
+        if info is None:
+            return None
+        k2d = upd_sub[info.kernel_name].reshape(info.reshaped_2d)
+        if info.bias_name is not None:
+            b2d = upd_sub[info.bias_name].reshape(1, -1)
+            mat = jnp.concatenate([k2d, b2d], axis=0)
+        else:
+            mat = k2d
+        return mat.T if info.maybe_transpose else mat
+    return jax.tree.map(
+            _augment, updates, shape_info,
+            is_leaf=lambda x: isinstance(x, dict) or (x is None) or isinstance(x, AugmentedShapeInfo)
+            )
+
+def _unaugment_tree(aug_updates, shape_info):
+    def _unaugment(aug, info):
+        if info is None:
+            return aug
+        mat = aug.T if info.maybe_transpose else aug
+        m, n = info.reshaped_2d
+        out = {info.kernel_name: mat[:m, :].reshape(info.kernel_shape)}
+        if info.bias_shape is not None:
+            out[info.bias_name] = mat[m:m + 1, :].reshape(info.bias_shape)
+        return out
+    return jax.tree.map(
+            _unaugment, aug_updates, shape_info,
+            is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
             )
 
 def low_rank_orthogonal_update(
@@ -335,12 +299,11 @@ def low_rank_orthogonal_update(
         The corresponding `GradientTransformation`.
     """
     param_labels = create_param_labels()
-    transform_shapes = create_transform_shapes()
-    inv_transform_shapes = create_inv_transform_shapes()
+    # transform_shapes = create_transform_shapes()
+    # inv_transform_shapes = create_inv_transform_shapes()
     return optax.partition(
             transforms={
                 'low_rank_orthogonal_update': optax.chain(
-                    transform_shapes,
                     scale_by_low_rank_orthogonal_update(
                         key=key,
                         beta1=beta1,
@@ -349,7 +312,6 @@ def low_rank_orthogonal_update(
                         rank_val=rank_val,
                         eps=eps
                         ),
-                    inv_transform_shapes,
                     optax.add_decayed_weights(weight_decay, mask),
                     optax.scale_by_learning_rate(lr)
                     ),
@@ -370,7 +332,7 @@ def low_rank_orthogonal_update(
 
 
 def scale_by_low_rank_orthogonal_update(
-      key: int,
+      key: chex.Array,
       beta1: float = 0.9, 
       krylov_iter: int = 2, 
       rank_type: str = 'sqrt', 
@@ -398,12 +360,27 @@ def scale_by_low_rank_orthogonal_update(
     Assumes params are matrices
     """
     def init_fn(params):
+        shape_info = _compute_shape_info(params)
+
+        def init_momentum(info):
+            if info is None:
+                return None
+            return jnp.zeros(info.augmented_shape, dtype=jnp.float32)
         momentum = jax.tree.map(
-                jnp.zeros_like, params
+                init_momentum,
+                shape_info,
+                is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
                 )
-        key_tree, rank_tree = create_svd_args(params, key, rank_type, rank=rank_val)
+
+        _, treedef = jax.tree.flatten(momentum)
+        key_leaves = jax.random.split(key, treedef.num_leaves)
+        key_tree = jax.tree.unflatten(treedef, key_leaves)
+
+        rank_tree = _compute_rank_tree(shape_info, rank_type, rank_val)
+
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
+                shape_info=shape_info,
                 momentum=momentum,
                 krylov_iter=krylov_iter,
                 rank=rank_tree,
@@ -413,22 +390,34 @@ def scale_by_low_rank_orthogonal_update(
     def update_fn(updates, state, params=None):
         del params
         step_inc = state.step + 1
-        momentum = _update_moment(updates, state.momentum, beta1, 1)
-        key, consumable_key = jax.tree.map(jax.random.split, state.key)
-        low_rank_momentum = jax.tree.map(
-                linalg.svd_lowrank,
-                momentum,
-                consumable_key,
-                state.rank,
-                state.krylov_iter
+        def split2(k):
+            a, b = jax.random.split(k, 2)
+            return a, b
+        split_tree = jax.tree.map(split2, state.key)
+        new_key = jax.tree.map(lambda ab: ab[0], split_tree)
+        use_key = jax.tree.map(lambda ab: ab[1], split_tree)
+        aug_updates = _augment_tree(updates, state.shape_info)
+        new_momentum = jax.tree.map(
+                lambda g, m: m if g is None else (1 - beta1) * g + beta1 * m,
+                aug_updates,
+                state.momentum
                 )
-        return low_rank_momentum, ScaleByLowRankOrthogonalUpdateState(
+        aug_precond = jax.tree.map(
+                lambda m, k, r: None if m is None else linalg.svd_lowrank(m, k, r, int(state.krylov_iter)),
+                new_momentum,
+                use_key,
+                state.rank
+                )
+        unaug_updates = _unaugment_tree(aug_precond, state.shape_info)
+        new_state = ScaleByLowRankOrthogonalUpdateState(
                 step=step_inc,
-                momentum=momentum,
-                key=key,
-                krylov_iter=krylov_iter,
+                shape_info=state.shape_info,
+                momentum=new_momentum,
+                krylov_iter=state.krylov_iter,
+                key=new_key,
                 rank=state.rank
                 )
+        return unaug_updates, new_state
     return optax.GradientTransformation(init_fn, update_fn)
 
 
@@ -480,6 +469,7 @@ def train_step(workload,
     grad_norm = jnp.sqrt(
           sum(jnp.sum(g**2) for g in jax.tree_util.tree_leaves(grad)))
 
+    grad_scaling_factor = 1.0
     if grad_clip is not None:
         grad_scaling_factor = grad_clip / (grad_norm + _GRAD_CLIP_EPS)
     grad_scaling_factor = jax.lax.clamp(min=0.0, x=grad_scaling_factor, max=1.0)

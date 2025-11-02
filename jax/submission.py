@@ -288,6 +288,7 @@ def low_rank_orthogonal_update(
         krylov_iter,
         rank_type,
         rank_val,
+        labels,
         eps=1e-8,
         eps_root=0.0,
         weight_decay=0.0,
@@ -299,9 +300,8 @@ def low_rank_orthogonal_update(
     Returns:
         The corresponding `GradientTransformation`.
     """
-    param_zeros_like = jax.tree.map(lambda s: jnp.zeros(s.shape_tuple), workload.param_shapes)
 
-    param_labels = create_param_labels()(params_zeros_like)
+    param_labels = labels
     # transform_shapes = create_transform_shapes()
     # inv_transform_shapes = create_inv_transform_shapes()
     return optax.partition(
@@ -667,6 +667,8 @@ def init_optimizer_state(
     else:
         rank_val = None
 
+    labels = create_param_labels()(param_zeros_like)
+
 
     opt_init_fn, opt_update_fn = low_rank_orthogonal_update(
             key=rng,
@@ -675,7 +677,8 @@ def init_optimizer_state(
             beta2=beta2,
             krylov_iter=krylov_iter,
             rank_type=rank_type,
-            rank_val=rank_val
+            rank_val=rank_val,
+            labels=labels
             )
     optimizer_state = opt_init_fn(params_zeros_like)
     return optimizer_state, opt_update_fn

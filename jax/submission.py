@@ -298,7 +298,9 @@ def low_rank_orthogonal_update(
     Returns:
         The corresponding `GradientTransformation`.
     """
-    param_labels = create_param_labels()
+    param_zeros_like = jax.tree.map(lambda s: jnp.zeros(s.shape_tuple), workload.param_shapes)
+
+    param_labels = create_param_labels()(params_zeros_like)
     # transform_shapes = create_transform_shapes()
     # inv_transform_shapes = create_inv_transform_shapes()
     return optax.partition(

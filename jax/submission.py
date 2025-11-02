@@ -70,7 +70,7 @@ def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
 def _is_weight_block(x):
-    return isinstance(x, dict) and any(k in x for k in ('kernel', 'embedding', 'embedding_table')
+    return isinstance(x, dict) and any(k in x for k in ('kernel', 'embedding', 'embedding_table'))
 
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """

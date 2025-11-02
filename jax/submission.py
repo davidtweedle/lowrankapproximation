@@ -377,7 +377,14 @@ def scale_by_low_rank_orthogonal_update(
         key_leaves = jax.random.split(key, treedef.num_leaves)
         key_tree = jax.tree.unflatten(treedef, key_leaves)
 
-        rank_tree = _compute_rank_tree(shape_info, rank_type, rank_val)
+        rank_tree_raw = _compute_rank_tree(shape_info, rank_type, rank_val)
+        def _to_pyint(r):
+            return None if r is None else int(r)
+
+        rank_tree = jax.tree.map(
+                _to_pyint, rank_tree_raw,
+                is_leaf=lambda x: (x is None) or isinstance(x, int)
+                )
 
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),

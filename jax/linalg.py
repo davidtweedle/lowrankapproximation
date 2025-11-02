@@ -1,4 +1,5 @@
 import jax
+from jax import lax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
@@ -174,6 +175,7 @@ def svd_lowrank(
         niter: int = 2,
         ) -> tuple[jnp.ndarray, jnp.ndarray]:
     m, n = x.shape  # assume that m >= n
+    d = int(d)
 
     Q = get_approximate_basis(x, key, d, niter)
     # returns an orthogonal m-by-(niter + 1) * d matrix
@@ -194,13 +196,13 @@ def get_approximate_basis(
     Uses gaussian random matrix
     '''
     m, n = x.shape
-    d = int(min(d, m, n))
+    d = int(d)
     R = jax.random.normal(key=key, shape=(n, d))
     Y = x @ R
     Q, _ = jnp.linalg.qr(Y, mode='reduced')
 
     def body(_, Qcur):
-        Z = x @ Qcur
+        Z = x.T @ Qcur
         Qt, _ = jnp.linalg.qr(Z, mode='reduced')
         Y = x @ Qt
         Qnew, _ = jnp.linalg.qr(Y, mode='reduced')

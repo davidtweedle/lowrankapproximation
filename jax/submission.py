@@ -200,7 +200,7 @@ def _compute_rank_tree(
             )
 
 @struct.dataclass    
-class ScaleByLowRankOrthogonalUpdateState(NamedTuple):
+class ScaleByLowRankOrthogonalUpdateState:
     """State for the Low Rank Orthogonal Update algorithm.
     """
     step: chex.Array          # number of steps

@@ -11,6 +11,7 @@ LayerNorm and BatchNorm parameters are optimized with nadamw.
 """
 
 import functools
+import math
 from typing import (
         Any,
         Callable,
@@ -79,10 +80,10 @@ def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
         tuple: (first_dim, product_of_remaining_dims) or original shape if matrix
     """
     if len(weight_shape) <= 2:
-        return weight_shape
+        return tuple(weight_shape)
 
-    first_dim = weight_shape[0]
-    rest_dim = int(jnp.prod(jnp.array(weight_shape[1:])))
+    first_dim = int(weight_shape[0])
+    rest_dim = int(math.prod(int(d) for d in weight_shape[1:]))
     return (first_dim, rest_dim)
 
 def _compute_shape_info(params):

@@ -126,7 +126,7 @@ def _compute_shape_info(params):
             m, n = reshaped_2d
             maybe_transpose = m < n
             extra = 1 if bias_name is not None else 0
-            augmented_shape = (n + extra, m) if maybe_transpose else (m, n + extra)
+            augmented_shape = (n, m + extra) if maybe_transpose else (m + extra, n)
 
             return AugmentedShapeInfo(
                     kernel_shape=kernel_shape,

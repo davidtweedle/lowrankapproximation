@@ -390,12 +390,10 @@ def scale_by_low_rank_orthogonal_update(
     def update_fn(updates, state, params=None):
         del params
         step_inc = state.step + 1
-        def split2(k):
-            a, b = jax.random.split(k, 2)
-            return a, b
-        split_tree = jax.tree.map(split2, state.key)
-        new_key = jax.tree.map(lambda ab: ab[0], split_tree)
-        use_key = jax.tree.map(lambda ab: ab[1], split_tree)
+        leaves, treedef = jax.tree.flatten(state.key)
+        split_leaves = [jax.random.split(k, 2) for k in leaves]
+        new_key = jax.tree.unflatten(treedef, [a for (a, b) in split_leaves])
+        use_key = jax.tree.unflatten(treedef, [b for (a, b) in split_leaves])
         aug_updates = _augment_tree(updates, state.shape_info)
         new_momentum = jax.tree.map(
                 lambda g, m: m if g is None else (1 - beta1) * g + beta1 * m,

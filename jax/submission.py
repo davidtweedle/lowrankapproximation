@@ -207,7 +207,6 @@ class ScaleByLowRankOrthogonalUpdateState:
     shape_info: Any = struct.field(pytree_node=False)           # Pytree of AugmentedShapeInfo
     momentum: Any             # Pytree storing momentum of parameter
     key: Any                  # random key Pytree
-    rank: Any                 # Pytree containing rank parameter for low rank svd
 
 def create_optimizer_sharding(optimizer_state, replicated, sharded):
     """
@@ -229,7 +228,6 @@ def create_optimizer_sharding(optimizer_state, replicated, sharded):
                     shape_info=replicated,
                     momentum=jax.tree.map(lambda _: replicated, state_component.momentum),
                     key=jax.tree.map(lambda _: sharded, state_component.key),
-                    rank=jax.tree.map(lambda _: replicated, state_component.rank)
                     )
         else:
             return jax.tree.map(lambda _: replicated, state_component)
@@ -330,7 +328,6 @@ def low_rank_orthogonal_update(
 
 
 
-
 def scale_by_low_rank_orthogonal_update(
       key: chex.Array,
       beta1: float = 0.9, 
@@ -360,6 +357,21 @@ def scale_by_low_rank_orthogonal_update(
     Assumes params are matrices
     """
     k_iter: int = int(krylov_iter)
+    def _pick_rank(info) -> Optional[int]:
+        if info is None:
+            return None
+        m, n = info.reshaped_2d
+        rmax = min(int(m), int(n))
+        if rank_type == 'sqrt':
+            r = int(math.sqrt(rmax))
+        elif rank_type == 'constant':
+            if rank_val is None:
+                raise ValueError("rank_val must be set for rank_type='constant'")
+            r = int(min(rank_val, rmax))
+        else:
+            raise ValueError(f"Unknown rank_type: {rank_type}")
+        return max(1, r)
+
     def init_fn(params):
         shape_info = _compute_shape_info(params)
 
@@ -377,20 +389,10 @@ def scale_by_low_rank_orthogonal_update(
         key_leaves = jax.random.split(key, treedef.num_leaves)
         key_tree = jax.tree.unflatten(treedef, key_leaves)
 
-        rank_tree_raw = _compute_rank_tree(shape_info, rank_type, rank_val)
-        def _to_pyint(r):
-            return None if r is None else int(r)
-
-        rank_tree = jax.tree.map(
-                _to_pyint, rank_tree_raw,
-                is_leaf=lambda x: (x is None) or isinstance(x, int)
-                )
-
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
                 shape_info=shape_info,
                 momentum=momentum,
-                rank=rank_tree,
                 key=key_tree
                 )
 
@@ -408,18 +410,18 @@ def scale_by_low_rank_orthogonal_update(
                 state.momentum
                 )
         aug_precond = jax.tree.map(
-                lambda m, k, r: None if m is None else linalg.svd_lowrank(m, k, r, k_iter),
+                lambda m, k, info: None if m is None else linalg.svd_lowrank(m, k, _pick_rank(info), k_iter),
                 new_momentum,
                 use_key,
-                state.rank
+                state.shape_info,
+                is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
                 )
         unaug_updates = _unaugment_tree(aug_precond, state.shape_info)
         new_state = ScaleByLowRankOrthogonalUpdateState(
                 step=step_inc,
                 shape_info=state.shape_info,
                 momentum=new_momentum,
-                key=new_key,
-                rank=state.rank
+                key=new_key
                 )
         return unaug_updates, new_state
     return optax.GradientTransformation(init_fn, update_fn)

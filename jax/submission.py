@@ -35,6 +35,29 @@ from . import linalg
 
 from algoperf import spec, jax_sharding_utils
 
+import os, atexit
+import jax.profiler as jprof
+
+PROFILE_DIR = "/workspace/logs/jax_profile"
+PROFILE_START_STEP = int(os.environ.get("PROFILE_START_STEP", "100"))
+
+_profile_started = False
+
+def _maybe_start_profile(step: int):
+    global _profile_started
+    if (not _profile_started) and (step >= PROFILE_START_STEP):
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        jprof.start_trace(PROFILE_DIR)
+        _profile_started = True
+        atexit.register(lambda: jprof.stop_trace() if _profile_started else None)
+
+def _maybe_stop_profile():
+    global _profile_started
+    if _profile_started:
+        jprof.stop_trace()
+        _profile_started = False
+
+
 # parameter names -- 'scale','bias' -- LayerNorm/BatchNorm (Apply nadamw)
 # 'kernel', 'embedding_table', 'embedding' -- higher-dimensional tensors to apply low rank orthogonal updates
 
@@ -42,7 +65,7 @@ HPARAMS = {
         'beta1': 0.9,           # momentum parameter for orthogonal updates and nadamw
         'beta2': 0.999,         # parameter for nadamw only (for the second moment)
         'krylov_iter': 2,       # number of iterations to use for finding range of input to svd
-        'learning_rate': 0.01,  # learning rate
+        'learning_rate': 0.001,  # learning rate
         'eps': 1e-8,            # eps value for nadamw 
         'eps_root': 0.0,        # sqrt(eps) value for nadamw
         'weight_decay': 0.01,   # weight_decay
@@ -173,7 +196,6 @@ def create_param_labels() -> Callable:
                 is_leaf=lambda x: x is None or _is_shape_info(x)
                 )
     return param_labels
-
 
 
 def _compute_rank_tree(
@@ -554,6 +576,9 @@ def update_params(
             in_shardings=arg_shardings,
             out_shardings=out_shardings,
             )
+
+    _maybe_start_profile(global_step)
+
     outputs = jitted_train_step(workload,
                                 opt_update_fn,
                                 model_state,
@@ -597,6 +622,7 @@ def prepare_for_eval(
     del eval_results
     del global_step
     del rng
+    _maybe_stop_profile()
     return (optimizer_state, current_param_container, model_state)
 
 def get_batch_size(workload_name):

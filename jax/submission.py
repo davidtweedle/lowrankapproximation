@@ -86,8 +86,8 @@ class AugmentedShapeInfo:
     bias_name: Optional[str]    = struct.field(pytree_node=False)    # name of bias weight
     bias_shape: Optional[tuple] = struct.field(pytree_node=False)     # shape of original bias tensor
     reshaped_2d: tuple          = struct.field(pytree_node=False)# shape of kernel reshaped as matrix
-    maybe_transpose: bool       = struct.field(pytree_node=False)# whether the augmented matrix should be transposed
     augmented_shape: tuple      = struct.field(pytree_node=False)# final shape of augmented matrix (after transposing)
+    factor_type: str            = struct.field(pytree_node=False)    # can be 'wide', 'tall', 'qr_with_pivot'
 
 def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
@@ -147,9 +147,14 @@ def _compute_shape_info(params):
 
             reshaped_2d = _reshape_to_2d(kernel_shape, bias_shape)
             m, n = reshaped_2d
-            maybe_transpose = m < n
             extra = 1 if bias_name is not None else 0
-            augmented_shape = (n, m + extra) if maybe_transpose else (m + extra, n)
+            augmented_shape = (m + extra, n)
+            if kernel_name in {'embedding', 'embedding_table'}:
+                factor_type = 'qr_with_pivot'
+            elif m + extra >= n:
+                factor_type = 'tall'
+            else:
+                factor_type = 'wide'
 
             return AugmentedShapeInfo(
                     kernel_shape=kernel_shape,
@@ -157,8 +162,8 @@ def _compute_shape_info(params):
                     bias_shape=bias_shape,
                     bias_name=bias_name,
                     reshaped_2d=reshaped_2d,
-                    maybe_transpose=maybe_transpose,
-                    augmented_shape=augmented_shape
+                    augmented_shape=augmented_shape,
+                    factor_type=factor_type
                     )
         else:
             return None
@@ -198,73 +203,17 @@ def create_param_labels() -> Callable:
     return param_labels
 
 
-def _compute_rank_tree(
-        shape_info,
-        rank_type: str,
-        rank_val: Optional[int] = None,
-        ):
-    def pick_rank(info):
-        if info is None: return None
-        m, n = info.reshaped_2d
-        rmax = min(int(m), int(n))
-        if rank_type == 'sqrt':
-            r = int(math.sqrt(rmax))
-        elif rank_type == 'constant':
-            if rank_val is None:
-                raise ValueError("rank_val must be set when rank_type='constant'.")
-            r = int(min(rank_val, rmax))
-        else:
-            raise ValueError(f"Unknown rank_type: {rank_type}.")
-        return max(1, r)
-    return jax.tree.map(
-            pick_rank, shape_info,
-            is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
-            )
-
 @struct.dataclass    
 class ScaleByLowRankOrthogonalUpdateState:
     """State for the Low Rank Orthogonal Update algorithm.
     """
     step: chex.Array          # number of steps
     shape_info: Any = struct.field(pytree_node=False)           # Pytree of AugmentedShapeInfo
-    momentum: Any             # Pytree storing momentum of parameter
-    key: Any                  # random key Pytree
+    momentum: Any            # Pytree storing momentum of parameter
+    key: chex.Array                 # random key Pytree
+    rank: Any
+    leaf_index_tree: Any = struct.field(pytree_node=False)
 
-def create_optimizer_sharding(optimizer_state, replicated, sharded):
-    """
-    Create sharding spec for optimizer
-
-    Args:
-        optimizer_state: The optimizer state structure
-        replicated: Sharding spec for replicated data
-        sharded: Sharding spec for batch sharded data
-
-    Returns:
-        Sharding spec sharding rng key across batches and replicating
-        all other optimizer variables
-    """
-    def shard_optimizer_component(state_component):
-        if isinstance(state_component, ScaleByLowRankOrthogonalUpdateState):
-            return ScaleByLowRankOrthogonalUpdateState(
-                    step=replicated,
-                    shape_info=replicated,
-                    momentum=jax.tree.map(lambda _: replicated, state_component.momentum),
-                    key=jax.tree.map(lambda _: sharded, state_component.key),
-                    )
-        else:
-            return jax.tree.map(lambda _: replicated, state_component)
-
-    return jax.tree.map(
-            shard_optimizer_component,
-            optimizer_state,
-            is_leaf=lambda x: (
-                isinstance(x, ScaleByLowRankOrthogonalUpdateState) or
-                (
-                    hasattr(x, '_fields') and
-                    not isinstance(x, ScaleByLowRankOrthogonalUpdateState)
-                    )
-                )
-            )
 
 def _augment_tree(updates, shape_info):
     def _augment(upd_sub, info):
@@ -276,7 +225,7 @@ def _augment_tree(updates, shape_info):
             mat = jnp.concatenate([k2d, b2d], axis=0)
         else:
             mat = k2d
-        return mat.T if info.maybe_transpose else mat
+        return mat
     return jax.tree.map(
             _augment, updates, shape_info,
             is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
@@ -286,7 +235,7 @@ def _unaugment_tree(aug_updates, shape_info):
     def _unaugment(aug, info):
         if info is None or isinstance(info, dict):
             return aug
-        mat = aug.T if info.maybe_transpose else aug
+        mat = aug
         m, n = info.reshaped_2d
         out = {info.kernel_name: mat[:m, :].reshape(info.kernel_shape)}
         if info.bias_shape is not None:
@@ -349,6 +298,33 @@ def low_rank_orthogonal_update(
             )
 
 
+def _compute_rank_tree(shape_info, rank_type: str, rank_val: Optional[int] = None):
+    def _pick_rank(info) -> Optional[int]:
+        if info is None:
+            return None
+        m, n = info.reshaped_2d
+        if info.factor_type == 'qr_with_pivot':
+            d = math.ceil(10 * math.log2(max(2, int(n))))
+            d = max(24, d)
+            k = min(n, math.ceil(math.sqrt(int(n))))
+            d = min(k, d)
+            return int(d)
+        rmax = min(int(m), int(n))
+        if rank_type == 'sqrt':
+            r = int(math.sqrt(rmax))
+        elif rank_type == 'constant':
+            if rank_val is None:
+                raise ValueError("rank_val must be set for rank_type='constant'")
+            r = int(min(rank_val, rmax))
+        else:
+            raise ValueError(f"Unknown rank_type: {rank_type}")
+        return max(1, r)
+    return jax.tree.map(
+            _pick_rank,
+            shape_info,
+            is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
+            )
+
 
 def scale_by_low_rank_orthogonal_update(
       key: chex.Array,
@@ -379,20 +355,6 @@ def scale_by_low_rank_orthogonal_update(
     Assumes params are matrices
     """
     k_iter: int = int(krylov_iter)
-    def _pick_rank(info) -> Optional[int]:
-        if info is None:
-            return None
-        m, n = info.reshaped_2d
-        rmax = min(int(m), int(n))
-        if rank_type == 'sqrt':
-            r = int(math.sqrt(rmax))
-        elif rank_type == 'constant':
-            if rank_val is None:
-                raise ValueError("rank_val must be set for rank_type='constant'")
-            r = int(min(rank_val, rmax))
-        else:
-            raise ValueError(f"Unknown rank_type: {rank_type}")
-        return max(1, r)
 
     def init_fn(params):
         shape_info = _compute_shape_info(params)
@@ -401,30 +363,45 @@ def scale_by_low_rank_orthogonal_update(
             if info is None:
                 return None
             return jnp.zeros(info.augmented_shape, dtype=jnp.float32)
+
         momentum = jax.tree.map(
                 init_momentum,
                 shape_info,
                 is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
                 )
 
-        _, treedef = jax.tree.flatten(momentum)
-        key_leaves = jax.random.split(key, treedef.num_leaves)
-        key_tree = jax.tree.unflatten(treedef, key_leaves)
+        leaves, treedef = jax.tree.flatten(momentum)
+        idx_list, counter = [], 0
+        for leaf in leaves:
+            if leaf is None:
+                idx_list.append(None)
+            else:
+                idx_list.append(int(counter))
+                counter += 1
+        leaf_index_tree = jax.tree.unflatten(treedef, idx_list)
+        rank_tree = _compute_rank_tree(shape_info, rank_type, rank_val)
 
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
                 shape_info=shape_info,
                 momentum=momentum,
-                key=key_tree
+                key=key,
+                rank=rank_tree,
+                leaf_index_tree=leaf_index_tree
                 )
 
     def update_fn(updates, state, params=None):
         del params
         step_inc = state.step + 1
-        leaves, treedef = jax.tree.flatten(state.key)
-        split_leaves = [jax.random.split(k, 2) for k in leaves]
-        new_key = jax.tree.unflatten(treedef, [a for (a, b) in split_leaves])
-        use_key = jax.tree.unflatten(treedef, [b for (a, b) in split_leaves])
+        step_key, new_key = jax.random.split(state.key, 2)
+        def make_leaf_key(idx):
+            return step_key if (idx is None) else jax.random.fold_in(step_key, idx)
+        per_leaf_keys = jax.tree.map(
+                make_leaf_key,
+                state.leaf_index_tree,
+                is_leaf=lambda x: (x is None) or isinstance(x, int)
+                )
+
         aug_updates = _augment_tree(updates, state.shape_info)
         new_momentum = jax.tree.map(
                 lambda g, m: m if g is None else (1 - beta1) * g + beta1 * m,
@@ -432,9 +409,10 @@ def scale_by_low_rank_orthogonal_update(
                 state.momentum
                 )
         aug_precond = jax.tree.map(
-                lambda m, k, info: None if m is None else linalg.svd_lowrank(m, k, _pick_rank(info), k_iter),
+                lambda m, k, r, s: None if m is None else linalg.compute_update(m, k, int(r) if isinstance(r, int) else int(jnp.asarray(r).item()), k_iter, s.factor_type),
                 new_momentum,
-                use_key,
+                per_leaf_keys,
+                state.rank,
                 state.shape_info,
                 is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
                 )
@@ -443,7 +421,9 @@ def scale_by_low_rank_orthogonal_update(
                 step=step_inc,
                 shape_info=state.shape_info,
                 momentum=new_momentum,
-                key=new_key
+                key=new_key,
+                rank=state.rank,
+                leaf_index_tree=state.leaf_index_tree
                 )
         return unaug_updates, new_state
     return optax.GradientTransformation(init_fn, update_fn)
@@ -547,14 +527,11 @@ def update_params(
     sharded = (
             jax_sharding_utils.get_batch_dim_sharding()
             )
-    optimizer_sharding_spec = create_optimizer_sharding(
-            optimizer_state, replicated=replicated, sharded=sharded
-            )
 
 
     arg_shardings = (
             replicated, #model_state
-            optimizer_sharding_spec, #optimizer_state # change to optimizer sharding eventually
+            replicated, #optimizer_state # change to optimizer sharding eventually
             replicated, # current_param_container
             sharded, # batch
             replicated, # per_device_rngs
@@ -563,7 +540,7 @@ def update_params(
             replicated, #dropout_rate
             )
     out_shardings = (
-            optimizer_sharding_spec, # new_optimizer_state # maybe sharded eventually
+            replicated, # new_optimizer_state # maybe sharded eventually
             replicated, # updated_params
             replicated, # new_model_state
             replicated, # loss
@@ -649,7 +626,7 @@ def get_batch_size(workload_name):
     elif workload_name == 'mnist':
         return 16
     elif workload_name == 'cifar':
-        return 128
+        return 1024
     else:
         raise ValueError(f'Unsupported workload name: {workload_name}.')
 

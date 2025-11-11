@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "low_rank_orthogonal_optimizer"
+version = "0.1.0"
+description = "Low-rank orthogonal Optax optimizer for Jax/Flax"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.md" }
+
+authors = [
+  { name = "David Tweedle", email = "david.aig.tweedle@gmail.com" }
+]
+
+dependencies = [
+  "jax>=0.4.20",
+  "optax>=0.2.0",
+  "flax>=0.8.0",
+  "chex>=0.1.86",
+]
+
+[project.urls]
+Homepage = "https://github.com/davidtweedle/lowrankapproximation"
+Source = "https://github.com/davidtweedle/lowrankapproximation"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["lra_opt"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff",
+  "mypy",
+]
+
+speedrun = [
+  "levanter",
+  "marin",
+]

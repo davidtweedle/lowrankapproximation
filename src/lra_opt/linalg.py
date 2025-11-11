@@ -1,13 +1,14 @@
 import jax
 from jax import lax
+import chex
 import jax.numpy as jnp
+import jax.scipy as jscp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import triton as plt
-import numpy as np
 from functools import partial
 
 def generate_sparse_sign_embedding(
-        key: jax.random.PRNGKey,
+        key: jax.Array,
         d: int,
         m: int,
         k: int
@@ -168,43 +169,122 @@ def srct_columnwise(
 
     return x_subsampled
 
-def svd_lowrank(
+@partial(jax.jit, static_argnums=(2,3,4))
+def compute_update(
         x: jnp.ndarray,
-        key: jax.random.PRNGKey,
+        key: jax.Array,
         d: int,
         niter: int = 2,
-        ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    m, n = x.shape  # assume that m >= n
+        factor_type: str = 'tall',
+        ) -> jnp.ndarray:
+    if factor_type == 'tall':
+        m, n = x.shape  # assume that m >= n
 
-    Q = get_approximate_basis(x, key, d, niter)
-    # returns an orthogonal m-by-(niter + 1) * d matrix
-    B = Q.T @ x
-    Ub, _, Vh = jnp.linalg.svd(B, full_matrices=False)
-    U = Q @ Ub
-    update = U @ Vh
+        Q = get_approximate_basis(x, key, d, niter, factor_type)
+        # returns an orthogonal m-by-(niter + 1) * d matrix
+        B = Q.T @ x
+        Ub, _, Vh = jnp.linalg.svd(B, full_matrices=False)
+        U = Q @ Ub
+        update = U @ Vh
+    elif factor_type == 'wide':
+        m, n = x.shape
+        Q = get_approximate_basis(x, key, d, niter, factor_type)
+        B = x @ Q
+        U, _, Vhb = jnp.linalg.svd(B.T, full_matrices=False)
+        Vh = Vhb @ Q
+        update = U @ Vh
+    elif factor_type == 'right_side_only':
+        m, n = x.shape
+        Q = get_approximate_basis(x, key, d, niter, 'tall')
+        B = Q.T @ x
+        Ub, S, Vh = jnp.linalg.svd(B, full_matrices=False)
+        U = Q @ Ub
+        update = (U * jnp.sqrt(S)) @ Vh
+    elif factor_type == 'qr_with_pivot':
+        update = rowspace_update_from_sketch(
+                x,
+                key,
+                d=d,
+                power=niter,
+                oversample=8
+                )
+    elif factor_type == 'qr_with_pivot_transpose':
+        update = rowspace_update_from_sketch(
+                x.T,
+                key,
+                d=d,
+                power=niter,
+                oversample=8
+                ).T
     return update
 
 def get_approximate_basis(
         x: jnp.ndarray,
-        key: jax.random.PRNGKey,
+        key: jax.Array,
         d: int,
         niter: int = 2,
+        factor_type: str = 'tall',
         ) -> jnp.ndarray:
     '''
     Uses Krylov block power iteration
     Uses gaussian random matrix
     '''
-    m, n = x.shape
-    R = jax.random.normal(key=key, shape=(n, d))
-    Y = x @ R
-    Q, _ = jnp.linalg.qr(Y, mode='reduced')
+    if factor_type == 'tall':
+        m, n = x.shape
+        R = jax.random.normal(key=key, shape=(n, d), dtype=x.dtype)
+        Y = x @ R
+        Q, _ = jnp.linalg.qr(Y, mode='reduced')
 
-    def body(_, Qcur):
-        Z = x.T @ Qcur
-        Qt, _ = jnp.linalg.qr(Z, mode='reduced')
-        Y = x @ Qt
-        Qnew, _ = jnp.linalg.qr(Y, mode='reduced')
-        return Qnew
+        def body(_, Qcur):
+            Z = x.T @ Qcur
+            Qt, _ = jnp.linalg.qr(Z, mode='reduced')
+            Y = x @ Qt
+            Qnew, _ = jnp.linalg.qr(Y, mode='reduced')
+            return Qnew
 
-    Q = lax.fori_loop(0, int(niter), body, Q)
+        Q = lax.fori_loop(0, int(niter), body, Q)
+    elif factor_type == 'wide':
+        m, n = x.shape
+        R = jax.random.normal(key=key, shape=(d, m), dtype=x.dtype)
+        Y = R @ x
+        Q, _ = jnp.linalg.qr(Y.T, mode='reduced')
+
+        def body(_, Qcur):
+            Z = Qcur @ x
+            Qt, _ = jnp.linalg.qr(Z, mode='reduced')
+            Y = x.T @ Qt
+            Qnew, _ = jnp.linalg.qr(Y, mode='reduced')
+            return Qnew
+        Q = lax.fori_loop(0, int(niter), body, Q)
     return Q
+
+@partial(jax.jit, static_argnums=(2,3,4))
+def rowspace_update_from_sketch(
+        x: jnp.ndarray,
+        key: jax.Array,
+        d: int,
+        power: int = 2,
+        oversample: int = 8
+        ) -> jnp.ndarray:
+
+    m, n = x.shape
+    d_eff = min(int(d) + int(oversample), m)
+    G = jax.random.normal(key, (n, d_eff), dtype=x.dtype)
+    Y = x @ G
+
+    def body(_, Ycur):
+        Z = x.T @ Ycur
+        Qz, _ = jnp.linalg.qr(Z, mode='reduced')
+        
+        Ynew = x @ Qz
+        Qy, _ = jnp.linalg.qr(Ynew, mode='reduced')
+        return Qy
+
+    Y = jax.lax.fori_loop(0, int(power), body, Y)
+
+    Qt, Rt, P = jscp.linalg.qr(Y.T, mode='economic', pivoting=True)
+    P_sel = P[:int(d)]
+    Qr, _ = jnp.linalg.qr(x[P_sel, :].T, mode='reduced')
+    update = jnp.zeros_like(x)
+    update = update.at[P_sel, :].set(Qr.T)
+    return update

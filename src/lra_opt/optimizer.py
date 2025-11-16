@@ -171,7 +171,7 @@ class ScaleByLowRankOrthogonalUpdateState:
     shape_info: Any = struct.field(pytree_node=False)           # Pytree of AugmentedShapeInfo
     momentum: Any            # Pytree storing momentum of parameter
     key: chex.Array                 # random key Pytree
-    rank: Any
+    rank: Any = struct.field(pytree_node=False)
     leaf_index_tree: Any = struct.field(pytree_node=False)
 
 
@@ -340,19 +340,13 @@ def scale_by_low_rank_orthogonal_update(
                 counter += 1
         leaf_index_tree = jax.tree.unflatten(treedef, idx_list)
         rank_tree = _compute_rank_tree(shape_info, rank_type, rank_val)
-        def _to_python_int(r):
-            if r is None or isinstance(r, int):
-                return r
-            return int(r.item())
-        rank_tree_int = jax.tree.map(_to_python_int, rank_tree)
-
 
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
                 shape_info=shape_info,
                 momentum=momentum,
                 key=key,
-                rank=rank_tree_int,
+                rank=rank_tree,
                 leaf_index_tree=leaf_index_tree
                 )
 
@@ -375,7 +369,7 @@ def scale_by_low_rank_orthogonal_update(
                 state.momentum
                 )
         aug_precond = jax.tree.map(
-                lambda m, k, r, s: None if m is None else linalg.compute_update(m, k, r if isinstance(r, int) else int(r.item()), k_iter, s.factor_type),
+                lambda m, k, r, s: None if m is None else linalg.compute_update(m, k, r, k_iter, s.factor_type),
                 new_momentum,
                 per_leaf_keys,
                 state.rank,

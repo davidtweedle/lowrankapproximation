@@ -277,12 +277,14 @@ def _compute_rank_tree(shape_info, rank_type: str, rank_val: Optional[int] = Non
         else:
             raise ValueError(f"Unknown rank_type: {rank_type}")
         return max(1, r)
-    return jax.tree.map(
-            _pick_rank,
+
+    shape_leaves, treedef = jax.tree.flatten(
             shape_info,
             is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
             )
-
+    rank_leaves = [_pick_rank(info) for info in shape_leaves]
+    rank_tree_of_ints = jax.tree.unflatten(treedef, rank_leaves)
+    return rank_tree_of_ints
 
 def scale_by_low_rank_orthogonal_update(
       key: chex.Array,

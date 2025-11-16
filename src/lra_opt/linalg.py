@@ -190,8 +190,8 @@ def compute_update(
         m, n = x.shape
         Q = get_approximate_basis(x, key, d, niter, factor_type)
         B = x @ Q
-        U, _, Vhb = jnp.linalg.svd(B.T, full_matrices=False)
-        Vh = Vhb @ Q
+        U, _, Vhb = jnp.linalg.svd(B, full_matrices=False)
+        Vh = Vhb @ Q.T
         update = U @ Vh
     elif factor_type == 'right_side_only':
         m, n = x.shape

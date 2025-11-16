@@ -38,8 +38,3 @@ dev = [
   "ruff",
   "mypy",
 ]
-
-speedrun = [
-  "levanter",
-  "marin",
-]

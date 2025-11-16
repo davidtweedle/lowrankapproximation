@@ -369,7 +369,7 @@ def scale_by_low_rank_orthogonal_update(
                 state.momentum
                 )
         aug_precond = jax.tree.map(
-                lambda m, k, r, s: None if m is None else linalg.compute_update(m, k, int(r), k_iter, s.factor_type),
+                lambda m, k, r, s: None if m is None else linalg.compute_update(m, k, r, k_iter, s.factor_type),
                 new_momentum,
                 per_leaf_keys,
                 state.rank,

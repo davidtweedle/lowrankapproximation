@@ -340,6 +340,12 @@ def scale_by_low_rank_orthogonal_update(
                 counter += 1
         leaf_index_tree = jax.tree.unflatten(treedef, idx_list)
         rank_tree = _compute_rank_tree(shape_info, rank_type, rank_val)
+        def _to_python_int(r):
+            if r is None or isinstance(r, int):
+                return r
+            return int(r.item())
+        rank_tree_int = jax.tree.map(_to_python_int, rank_tree)
+
 
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),

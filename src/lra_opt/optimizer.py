@@ -352,7 +352,7 @@ def scale_by_low_rank_orthogonal_update(
                 shape_info=shape_info,
                 momentum=momentum,
                 key=key,
-                rank=rank_tree,
+                rank=rank_tree_int,
                 leaf_index_tree=leaf_index_tree
                 )
 

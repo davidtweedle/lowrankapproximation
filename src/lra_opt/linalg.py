@@ -250,7 +250,7 @@ def get_approximate_basis(
         Q, _ = jnp.linalg.qr(Y.T, mode='reduced')
 
         def body(_, Qcur):
-            Z = Qcur @ x
+            Z = x @ Qcur
             Qt, _ = jnp.linalg.qr(Z, mode='reduced')
             Y = x.T @ Qt
             Qnew, _ = jnp.linalg.qr(Y, mode='reduced')

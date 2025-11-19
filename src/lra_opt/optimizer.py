@@ -14,10 +14,14 @@ import math
 from typing import (
         Any,
         Callable,
+        Dict,
+        List,
+        NamedTuple,
         Optional,
         Tuple,
         )
 
+import collections
 import chex
 import jax
 import jax.numpy as jnp
@@ -31,6 +35,8 @@ from . import linalg
 # parameter names -- 'scale','bias' -- LayerNorm/BatchNorm (Apply nadamw)
 # 'kernel', 'embedding_table', 'embedding' -- higher-dimensional tensors to apply low rank orthogonal updates
 
+
+
 @struct.dataclass
 class AugmentedShapeInfo:
     """
@@ -43,6 +49,7 @@ class AugmentedShapeInfo:
     reshaped_2d: tuple          = struct.field(pytree_node=False)# shape of kernel reshaped as matrix
     augmented_shape: tuple      = struct.field(pytree_node=False)# final shape of augmented matrix (after transposing)
     factor_type: str            = struct.field(pytree_node=False)    # can be 'wide', 'tall', 'qr_with_pivot'
+    dtype: jnp.dtype            = struct.field(pytree_node=False)
 
 def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
@@ -102,6 +109,7 @@ def _compute_shape_info(params):
                 kernel_name = 'lm_head'
             kernel = subtree[kernel_name]
             kernel_shape = kernel.shape
+            dtype = kernel.dtype
 
             reshaped_2d = _reshape_to_2d(kernel_shape, bias_shape)
             m, n = reshaped_2d
@@ -123,7 +131,8 @@ def _compute_shape_info(params):
                     bias_name=bias_name,
                     reshaped_2d=reshaped_2d,
                     augmented_shape=augmented_shape,
-                    factor_type=factor_type
+                    factor_type=factor_type,
+                    dtype=dtype,
                     )
         else:
             return None
@@ -133,6 +142,209 @@ def _compute_shape_info(params):
             params,
             is_leaf=_is_weight_block
             )
+
+class LayerBucket(NamedTuple):
+    max_m: int
+    max_n: int
+    rank: int
+    layer_paths: List[Tuple[str, ...]]
+    shape_infos: List[AugmentedShapeInfo]
+    dtype: jnp.dtype
+    factor_type: str
+
+def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
+    if factor_type == 'qr_with_pivot':
+        d = math.ceil(10 * math.log2(max(2, int(n))))
+        d = max(24, d)
+        k = min(n, math.ceil(math.sqrt(int(n))))
+        d = min(k, d)
+        return int(d)
+    rmax = min(int(m), int(n))
+    if rank_type == 'sqrt':
+        r = int(math.sqrt(rmax))
+    elif rank_type == 'constant':
+        if rank_val is None:
+            raise ValueError("rank_val must be set for rank_type='constant'")
+        r = int(min(rank_val, rmax))
+    else:
+        raise ValueError(f"Unknown rank_type: {rank_type}")
+    r = max(1, r)
+    r_po2 = 1 << (r - 1).bit_length()
+    return r_po2
+
+
+def compute_bucket_structure(shape_info_tree: Any, params: Any, rank_type: str, rank_val: int = None) -> Dict[str, LayerBucket]:
+    leaves_with_paths, treedef = tree.jax.flatten_with_path(shape_info_tree)
+    valid_layers = []
+    for path, leaf in leaves_with_paths:
+        if isinstance(leaf, AugmentedShapeInfo):
+            valid_layers.append((path, leaf))
+    buckets_by_shape = collections.defaultdict(list)
+    special_bucket_map = {}
+    for path, info in valid_layers:
+        is_special_layer = info.kernel_name in {'embedding', 'embedding_table', 'lm_head'}
+        M, N = info.augmented_shape
+        if is_special_layer:
+            bucket_name = f"Special_{info.kernel_name}_{M}x{N}_idx{len(initial_bucket_map)}"
+            m, n = info.reshaped_2d
+            rank = _pick_rank(m, n, info.factor_type, rank_type, rank_val)
+            special_bucket_map[bucket_name] = LayerBucket(
+                    max_m=M,
+                    max_n=N,
+                    dtype=info.dtype,
+                    layer_paths=[path],
+                    shape_infos=[info],
+                    factor_type=info.factor_type,
+                    rank=rank
+                    )
+        else:
+            buckets_by_shape[(M, N, info.factor_type, info.dtype)].append((path, info))
+    initial_bucket_map = {}
+
+    for (M, N, factor_type, dtype), layer_list in buckets_by_shape.items():
+        bucket_name = f"Bucket_{M}x{N}"
+        max_m, max_n = M, N
+        layer_paths = [item[0] for item in layer_list]
+        shape_infos = [item[1] for item in layer_list]
+
+        initial_bucket_map[bucket_name] = LayerBucket(
+                max_m=max_m,
+                max_n=max_n,
+                layer_paths=layer_paths,
+                shape_infos=shape_infos,
+                dtype=dtype,
+                factor_type=factor_type,
+                )
+    merged_bucket_map = _merge_buckets(initial_bucket_map)
+    for name, bucket in merged_bucket_map:
+        m, n = bucket.max_m, bucket.max_n
+        factor_type = bucket.factor_type
+        merged_bucket_map[name].rank = _pick_rank(m, n, factor_type, rank_type, rank_val)
+    merged_bucket_map = merged_bucket_map | special_bucket_map
+    print("\n--- Optimizer Bucket Initialization Log ---")
+    total_layers = sum(len(b.layer_paths) for b in merged_bucket_map.values())
+    total_unique_shapes = len(merged_bucket_map)
+    print(f"Total Layers Partitioned: {total_layers}")
+    print(f"Total Unique Buckets: {total_unique_shapes}")
+    for name, bucket in merged_bucket_map.items():
+        num_layers = len(bucket.layer_paths)
+        print(f"\nBucket Name: {name} ({num_layers} layers)")
+        print(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
+        print(f" Dtype: {bucket.dtype}")
+        print(f" Factor type: {bucket.factor_Type}")
+        print(f" Total elements in Bucket Tensor: {num_layers * bucket.max_m * bucket.max_n}")
+    print("---------------------")
+    return merged_bucket_map
+
+def _merge_buckets(initial_bucket_map):
+    ActiveBuckets: List[Tuple(int, LayerBucket)] = [(bucket.max_m * bucket.max_n, bucket) for bucket in initial_bucket_map.values() ]
+    ActiveBuckets.sort(key=lambda b: b[0])
+    while True:
+        best_cost = float('inf')
+        best_pair = None
+        N = len(ActiveBuckets)
+        for i in range(N):
+            for j in range(i + 1, N):
+
+                area_A, bucket_A = ActiveBuckets[i]
+                area_B, bucket_B = ActiveBuckets[j]
+                M_new = max(bucket_A.max_m, bucket_B.max_m)
+                N_new = max(bucket_A.max_n, bucket_B.max_n)
+                new_total_area = (M_new * N_new) * (len(bucket_A.layer_paths) + len(bucket_B.layer_paths))
+                total_useful_area = area_A + area_B
+                padding_cost = (new_total_area - total_useful_area) / new_total_area
+                if padding_cost < best_cost:
+                    best_cost = padding_cost
+                    best_pair = (i, j)
+        tau_pad = 0.2
+
+        if best_cost <= tau_pad:
+            i, j = best_pair  # i < j
+            area_A, bucket_A = ActiveBuckets[i]
+            area_B, bucket_B = ActiveBuckets[j]
+
+            M_new = max(bucket_A.max_m, bucket_B.max_m)
+            N_new = max(bucket_A.max_n, bucket_B.max_n)
+            bucket_merged = Layer_Bucket(
+                    max_m=M_new,
+                    max_n=N_new,
+                    layer_paths=bucket_A.layer_paths + bucket_B.layer_paths,
+                    shape_infos=bucket_A.shape_infos + bucket_B.shape_infos,
+                    dtype=bucket_A.dtype
+                    )
+            del ActiveBuckets[j]
+            ActiveBuckets[i] = (area_A + area_B, bucket_merged)
+        else:
+            print(f"Stopping merge: Best cost was {best_cost:.2f}k which is > {tau_pad}")
+            break
+    final_bucket_map = {}
+    for _, bucket in ActiveBuckets:
+        M = bucket.max_m
+        N = bucket.max_n
+        bucket_name = f"Bucket_{M}x{N}"
+        final_bucket_map[bucket_name] = bucket
+    return final_bucket_map
+
+
+def _get_leaf_by_key_path(tree: Any, path: Tuple) -> Any:
+    res = tree
+    for key_node in path:
+        if isinstance(key_node, (DictKey, FieldKey, GetAttrKey)):
+            key_val = key_node.key if hasattr(key_node, 'key') else key_node.name
+        elif isinstance(key_node, SequenceKey):
+            key_val = key_node.idx
+        else:
+            raise TypeError(f"Unknown JAX Key type in path: {type(key_node)}")
+        res = res[key_val]
+    return res
+
+def _tree_to_bucketed_tensors(
+        updates,
+        bucket_structure: Dict[str, LayerBucket],
+        ) -> Dict[str, jnp.ndarray]:
+    batched_tensors = {}
+
+    for bucket_name, bucket in bucket_structure.items():
+        M_max, N_max = bucket.max_m, bucket.max_n
+        num_layers = len(bucket.layer_paths)
+        dtype = bucket.dtype
+        bucket_tensor = jnp.zeros((num_layers, M_max, N_max), dtype=dtype)
+        for i, (path, info) in enumerate(zip(bucket.layer_paths, bucket.shape_infos)):
+            M_i, N_i = info.augmented_shape
+            padded_matrix = jnp.zeros((bucket.max_m, bucket.max_n), dtype=bucket.dtype)
+            layer = _get_leaf_by_key_path(updates, path)
+            m, n = info.reshaped_2d
+            kernel = layer[info.kernel_name].reshape(m, n)
+            padded_matrix = padded_matrix.at[:m, :n].set(kernel)
+            if info.bias_name is not None:
+                b2d = layer[info.bias_name].reshape(1, -1)
+                padded_matrix = padded_matrix.at[m: m + 1, :n].set(b2d)
+            bucket_tensor = bucket_tensor.at[i].set(padded_matrix)
+        batched_tensors[bucket_name] = bucket_tensor
+    return batched_tensors
+
+def _bucketed_tensors_to_tree(
+        batched_precond: Dict[str, jnp.ndarray],
+        bucket_structure: Dict[str, LayerBucket],
+        original_template_tree,  # spec.ParameterContainer?
+        ):  # spec.ParameterContainer? 
+    updates_flat = {} # {path_tuple: update_matrix,....}
+    for bucket_name, precond_tensor in batched_precond.items():
+        bucket = bucket_structure[bucket_name]
+        for i, (path, info) in enumerate(zip(bucket.layer_paths, bucket.shape_infos)):
+            layer_precond_padded = precond_tensor[i]
+            m, n = info.reshaped_2d
+            layer_precond_unpadded = layer_precond_padded[:m, :n]
+            layer_updates_dict = {}
+            layer_updates_dict[info.kernel_name] = layer_precond_unpadded.reshape(info.original_shape)
+            if info.bias_name is not None:
+                layer_bias = layer_precond_padded[m : m + 1, :n]
+                layer_updates_dict[info.bias_name] = layer_bias.reshape(info.original_bias_shape)
+
+            updates_flat[path] = layer_updates_dict
+    final_updates_tree = jax.tree.unflatten(updates_flat, original_template_tree)
+    return final_updates_tree
+
 
 def create_param_labels() -> Callable:
     """
@@ -168,43 +380,10 @@ class ScaleByLowRankOrthogonalUpdateState:
     """State for the Low Rank Orthogonal Update algorithm.
     """
     step: chex.Array          # number of steps
-    shape_info: Any = struct.field(pytree_node=False)           # Pytree of AugmentedShapeInfo
-    momentum: Any            # Pytree storing momentum of parameter
-    key: chex.Array                 # random key Pytree
-    rank: Any = struct.field(pytree_node=False)
-    leaf_index_tree: Any = struct.field(pytree_node=False)
+    bucket_structure: Any = struct.field(pytree_node=False)
+    momentum: Dict[str, jnp.ndarray]
+    key: chex.Array
 
-
-def _augment_tree(updates, shape_info):
-    def _augment(upd_sub, info):
-        if info is None or isinstance(info, dict):
-            return None
-        k2d = upd_sub[info.kernel_name].reshape(info.reshaped_2d)
-        if info.bias_name is not None:
-            b2d = upd_sub[info.bias_name].reshape(1, -1)
-            mat = jnp.concatenate([k2d, b2d], axis=0)
-        else:
-            mat = k2d
-        return mat
-    return jax.tree.map(
-            _augment, updates, shape_info,
-            is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
-            )
-
-def _unaugment_tree(aug_updates, shape_info):
-    def _unaugment(aug, info):
-        if info is None or isinstance(info, dict):
-            return aug
-        mat = aug
-        m, n = info.reshaped_2d
-        out = {info.kernel_name: mat[:m, :].reshape(info.kernel_shape)}
-        if info.bias_shape is not None:
-            out[info.bias_name] = mat[m:m + 1, :].reshape(info.bias_shape)
-        return out
-    return jax.tree.map(
-            _unaugment, aug_updates, shape_info,
-            is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
-            )
 
 def low_rank_orthogonal_update(
         lr,
@@ -256,41 +435,11 @@ def low_rank_orthogonal_update(
             )
 
 
-def _compute_rank_tree(shape_info, rank_type: str, rank_val: Optional[int] = None):
-    def _pick_rank(info) -> Optional[int]:
-        if info is None:
-            return None
-        m, n = info.reshaped_2d
-        if info.factor_type == 'qr_with_pivot':
-            d = math.ceil(10 * math.log2(max(2, int(n))))
-            d = max(24, d)
-            k = min(n, math.ceil(math.sqrt(int(n))))
-            d = min(k, d)
-            return int(d)
-        rmax = min(int(m), int(n))
-        if rank_type == 'sqrt':
-            r = int(math.sqrt(rmax))
-        elif rank_type == 'constant':
-            if rank_val is None:
-                raise ValueError("rank_val must be set for rank_type='constant'")
-            r = int(min(rank_val, rmax))
-        else:
-            raise ValueError(f"Unknown rank_type: {rank_type}")
-        return max(1, r)
-
-    shape_leaves, treedef = jax.tree.flatten(
-            shape_info,
-            is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
-            )
-    rank_leaves = [_pick_rank(info) for info in shape_leaves]
-    rank_tree_of_ints = jax.tree.unflatten(treedef, rank_leaves)
-    return rank_tree_of_ints
-
 def scale_by_low_rank_orthogonal_update(
       key: chex.Array,
-      beta1: float = 0.9, 
-      krylov_iter: int = 2, 
-      rank_type: str = 'sqrt', 
+      beta1: float = 0.9,
+      krylov_iter: int = 2,
+      rank_type: str = 'sqrt',
       rank_val: Optional[int] = None,
       eps=1e-8,
       ):
@@ -317,75 +466,82 @@ def scale_by_low_rank_orthogonal_update(
     k_iter: int = int(krylov_iter)
 
     def init_fn(params):
+        # calculate buckets
         shape_info = _compute_shape_info(params)
+        bucket_structure = compute_bucket_structure(
+                shape_info,
+                params,
+                rank_type,
+                rank_val,
+                )
 
         def init_momentum(info):
             if info is None:
                 return None
             return jnp.zeros(info.augmented_shape, dtype=jnp.float32)
+        # initialize momentum to be shaped according to buckets
 
         momentum = jax.tree.map(
                 init_momentum,
                 shape_info,
-                is_leaf=lambda x: (x is None) or isinstance(x, AugmentedShapeInfo)
+                is_leaf=lambda x:
+                (x is None) or isinstance(x, AugmentedShapeInfo)
                 )
-
-        leaves, treedef = jax.tree.flatten(momentum)
-        idx_list, counter = [], 0
-        for leaf in leaves:
-            if leaf is None:
-                idx_list.append(None)
-            else:
-                idx_list.append(int(counter))
-                counter += 1
-        leaf_index_tree = jax.tree.unflatten(treedef, idx_list)
-        rank_tree = _compute_rank_tree(shape_info, rank_type, rank_val)
+        batched_momentum = _tree_to_bucketed_tensors(
+                momentum,
+                bucket_structure,
+                )
 
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
-                shape_info=shape_info,
-                momentum=momentum,
+                bucket_structure=bucket_structure,
+                momentum=batched_momentum,
                 key=key,
-                rank=rank_tree,
-                leaf_index_tree=leaf_index_tree
                 )
 
     def update_fn(updates, state, params=None):
         del params
         step_inc = state.step + 1
-        step_key, new_key = jax.random.split(state.key, 2)
-        def make_leaf_key(idx):
-            return step_key if (idx is None) else jax.random.fold_in(step_key, idx)
-        per_leaf_keys = jax.tree.map(
-                make_leaf_key,
-                state.leaf_index_tree,
-                is_leaf=lambda x: (x is None) or isinstance(x, int)
+
+        batched_updates = _tree_to_bucketed_tensors(
+                updates,
+                state.bucket_structure
+                )
+        num_buckets = len(state.bucket_structure)
+        master_bucket_key, new_state_key = jax.random.split(state.key, 2)
+        bucket_keys = jax.random.split(master_bucket_key, num_buckets)
+        batched_momentum=state.momentum
+        step_key, *new_keys = jax.random.split(state.key, len(batched_momentum) + 1)
+        bucket_items = list(state.bucket_structure.items())
+
+        batched_updated_momentum = {}
+        for i, (name, bucket) in enumerate(bucket_items):
+            use_key = bucket_keys[i]
+            update = batched_updates[name]
+            momentum = batched_momentum[name]
+            rank = bucket.rank
+            factor_type = bucket.factor_type
+            updated_momentum = (1 - beta1) * update + beta1 * momentum
+            batched_updated_momentum[name] = updated_momentum
+            batched_updates[name] = linalg.compute_batched_update(
+                    updated_momentum,
+                    use_key,
+                    rank,
+                    factor_type,
+                    )
+        tree_updates = _bucketed_tensors_to_tree(
+                batched_updates,
+                state.bucket_structure,
+                updates,
                 )
 
-        aug_updates = _augment_tree(updates, state.shape_info)
-        new_momentum = jax.tree.map(
-                lambda g, m: m if g is None else (1 - beta1) * g + beta1 * m,
-                aug_updates,
-                state.momentum
-                )
-        aug_precond = jax.tree.map(
-                lambda m, k, r, s: None if m is None else linalg.compute_update(m, k, r, k_iter, s.factor_type),
-                new_momentum,
-                per_leaf_keys,
-                state.rank,
-                state.shape_info,
-                is_leaf=lambda x: _is_weight_block(x) or isinstance(x, AugmentedShapeInfo)
-                )
-        unaug_updates = _unaugment_tree(aug_precond, state.shape_info)
         new_state = ScaleByLowRankOrthogonalUpdateState(
                 step=step_inc,
-                shape_info=state.shape_info,
-                momentum=new_momentum,
-                key=new_key,
-                rank=state.rank,
-                leaf_index_tree=state.leaf_index_tree
+                momentum=batched_updated_momentum,
+                key=step_key,
+                bucket_structure=state.bucket_structure,
                 )
-        return unaug_updates, new_state
+        return tree_updates, new_state
     return optax.GradientTransformation(init_fn, update_fn)
 
 

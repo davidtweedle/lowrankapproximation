@@ -169,8 +169,10 @@ def srct_columnwise(
 
     return x_subsampled
 
+EPSILON = 1e-5
+
 @partial(jax.jit, static_argnums=(2,3,4))
-def compute_update(
+def compute_batched_update(
         x: jnp.ndarray,
         key: jax.Array,
         d: int,
@@ -178,28 +180,48 @@ def compute_update(
         factor_type: str = 'tall',
         ) -> jnp.ndarray:
     if factor_type == 'tall':
-        m, n = x.shape  # assume that m >= n
+        b, m, n = x.shape  # assume that m >= n
+        orig_dtype = x.dtype
 
         Q = get_approximate_basis(x, key, d, niter, factor_type)
-        # returns an orthogonal m-by-(niter + 1) * d matrix
-        B = Q.T @ x
-        Ub, _, Vh = jnp.linalg.svd(B, full_matrices=False)
-        U = Q @ Ub
-        update = U @ Vh
+        # shape b, m, d
+        B = jnp.einsum('bmd, bmn -> bdn', Q, x)
+        # B = Q.T @ x
+        Ub, S, Vh = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
+        mask = (S > EPSILON).astype(jnp.float32)
+        Ub = jnp.einsum('bdr, br -> bdr', Ub, mask)
+        # U = Q @ Ub
+        U = jnp.einsum('bmd, bdr -> bmr', Q, Ub)
+        update = jnp.einsum('bmr, brn -> bmn', U, Vh).astype(orig_dtype)
+        
+        # update = U @ Vh
     elif factor_type == 'wide':
-        m, n = x.shape
+        b, m, n = x.shape
+        orig_dtype = x.dtype
         Q = get_approximate_basis(x, key, d, niter, factor_type)
-        B = x @ Q
-        U, _, Vhb = jnp.linalg.svd(B, full_matrices=False)
-        Vh = Vhb @ Q.T
-        update = U @ Vh
+        B = jnp.einsum('bmn, bnd -> bmd', x, Q)
+        # B = x @ Q
+        U, S, Vhb = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
+        mask = (S > EPSILON).astype(jnp.float32)
+        U = jnp.einsum('bmr, br -> bmr', U, mask)
+        Vh = jnp.einsum('brd, bnd -> brn', Vhb, Q)
+        # Vh = Vhb @ Q.T
+        # update = U @ Vh
+        update = jnp.einsum('bmr, brn -> bmn', U, Vh).astype(orig_dtype)
     elif factor_type == 'right_side_only':
-        m, n = x.shape
+        b, m, n = x.shape
+        orig_dtype = x.dtype
         Q = get_approximate_basis(x, key, d, niter, 'tall')
-        B = Q.T @ x
-        Ub, S, Vh = jnp.linalg.svd(B, full_matrices=False)
-        U = Q @ Ub
-        update = (U * jnp.sqrt(S)) @ Vh
+        # B = Q.T @ x
+        B = jnp.einsum('bmd, bmn -> bdn', Q, x)
+
+        Ub, S, Vh = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
+        S = jnp.where(S > EPSILON, S, 0.0)
+        U = jnp.einsum('bmd, bdr -> bmr', Q, Ub)
+        # U = Q @ Ub
+        U_s = jnp.einsum('bmr, br -> bmr', U, jnp.sqrt(S))
+        update = jnp.einsum('bmr, brn -> bmn', U_s, Vh).astype(orig_dtype)
+        # update = (U * jnp.sqrt(S)) @ Vh
     elif factor_type == 'qr_with_pivot':
         update = rowspace_update_from_sketch(
                 x,
@@ -210,12 +232,12 @@ def compute_update(
                 )
     elif factor_type == 'qr_with_pivot_transpose':
         update = rowspace_update_from_sketch(
-                x.T,
+                x.transpose(0, 2, 1),
                 key,
                 d=d,
                 power=niter,
                 oversample=8
-                ).T
+                ).transpose(0, 2, 1)
     return update
 
 def get_approximate_basis(
@@ -230,33 +252,40 @@ def get_approximate_basis(
     Uses gaussian random matrix
     '''
     if factor_type == 'tall':
-        m, n = x.shape
-        R = jax.random.normal(key=key, shape=(n, d), dtype=x.dtype)
-        Y = x @ R
+        b, m, n = x.shape
+        R = jax.random.normal(key=key, shape=(b, n, d), dtype=x.dtype)
+        Y = jnp.einsum('bmn, bnd -> bmd', x, R)
+        # Y = x @ R
         Q, _ = jnp.linalg.qr(Y, mode='reduced')
 
         def body(_, Qcur):
-            Z = x.T @ Qcur
+            # Z = x.T @ Qcur
+            Z = jnp.einsum('bmn, bmr -> bnr', x, Qcur)
             Qt, _ = jnp.linalg.qr(Z, mode='reduced')
-            Y = x @ Qt
+            # Y = x @ Qt
+            Y = jnp.einsum('bmn, bnr -> bmr', x, Qt)
             Qnew, _ = jnp.linalg.qr(Y, mode='reduced')
             return Qnew
 
         Q = lax.fori_loop(0, int(niter), body, Q)
     elif factor_type == 'wide':
-        m, n = x.shape
-        R = jax.random.normal(key=key, shape=(d, m), dtype=x.dtype)
-        Y = R @ x
-        Q, _ = jnp.linalg.qr(Y.T, mode='reduced')
+        b, m, n = x.shape
+        R = jax.random.normal(key=key, shape=(b, d, m), dtype=x.dtype)
+        Y = jnp.einsum('bdm, bmn -> bdn', R, x)
+        # Y = R @ x
+        Q, _ = jnp.linalg.qr(Y.transpose(0, 2, 1), mode='reduced')
 
         def body(_, Qcur):
-            Z = x @ Qcur
+            # Z = x @ Qcur
+            Z = jnp.einsum('bmn, bnd -> bmd', x, Qcur)
             Qt, _ = jnp.linalg.qr(Z, mode='reduced')
-            Y = x.T @ Qt
+            # Y = x.T @ Qt
+            Y = jnp.einsum('bmn, bmd -> bnd', x, Qt)
             Qnew, _ = jnp.linalg.qr(Y, mode='reduced')
             return Qnew
         Q = lax.fori_loop(0, int(niter), body, Q)
     return Q
+
 
 @partial(jax.jit, static_argnums=(2,3,4))
 def rowspace_update_from_sketch(
@@ -267,24 +296,29 @@ def rowspace_update_from_sketch(
         oversample: int = 8
         ) -> jnp.ndarray:
 
-    m, n = x.shape
+    b, m, n = x.shape
     d_eff = min(int(d) + int(oversample), m)
-    G = jax.random.normal(key, (n, d_eff), dtype=x.dtype)
-    Y = x @ G
+    G = jax.random.normal(key, (b, n, d_eff), dtype=x.dtype)
+    Y = jnp.einsum('bmn, bnd -> bmd', x, G)
+    # Y = x @ G
 
     def body(_, Ycur):
-        Z = x.T @ Ycur
+        # Z = x.T @ Ycur
+        Z = jnp.einsum('bmn, bmd -> bnd', x, Ycur)
         Qz, _ = jnp.linalg.qr(Z, mode='reduced')
-        
-        Ynew = x @ Qz
+        # Ynew = x @ Qz
+        Ynew = jnp.einsum('bmn, bnd -> bmd', x, Qz)
         Qy, _ = jnp.linalg.qr(Ynew, mode='reduced')
         return Qy
 
     Y = jax.lax.fori_loop(0, int(power), body, Y)
 
-    Qt, Rt, P = jscp.linalg.qr(Y.T, mode='economic', pivoting=True)
-    P_sel = P[:int(d)]
-    Qr, _ = jnp.linalg.qr(x[P_sel, :].T, mode='reduced')
+    Qt, Rt, P = jscp.linalg.qr(Y.transpose(0, 2, 1), mode='economic', pivoting=True)
+    P_sel = P[:, :int(d)]
+    b = P_sel.shape[0]
+    batch_idx = jnp.arange(b)[:, None]
+    x_sel = x[batch_idx, P_sel, :]
+    Qr, _ = jnp.linalg.qr(x_sel.transpose(0, 2, 1), mode='reduced')
     update = jnp.zeros_like(x)
-    update = update.at[P_sel, :].set(Qr.T)
+    update = update.at[batch_idx, P_sel, :].set(Qr.transpose(0, 2, 1))
     return update

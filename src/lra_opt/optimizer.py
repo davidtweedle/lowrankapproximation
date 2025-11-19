@@ -174,7 +174,7 @@ def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
 
 
 def compute_bucket_structure(shape_info_tree: Any, params: Any, rank_type: str, rank_val: int = None) -> Dict[str, LayerBucket]:
-    leaves_with_paths, treedef = tree.jax.flatten_with_path(shape_info_tree)
+    leaves_with_paths, treedef = jax.tree.flatten_with_path(shape_info_tree)
     valid_layers = []
     for path, leaf in leaves_with_paths:
         if isinstance(leaf, AugmentedShapeInfo):

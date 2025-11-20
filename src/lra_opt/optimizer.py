@@ -512,6 +512,7 @@ def scale_by_low_rank_orthogonal_update(
     Assumes params are matrices
     """
     def init_fn(params):
+        logging.info(f"Type of params: {type(params)}")
         # calculate buckets
         shape_info = _compute_shape_info(params)
         bucket_structure = compute_bucket_structure(

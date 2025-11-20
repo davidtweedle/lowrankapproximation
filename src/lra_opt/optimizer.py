@@ -227,7 +227,7 @@ def compute_bucket_structure(shape_info_tree: Any, params: Any, rank_type: str, 
                 factor_type=factor_type,
                 )
     merged_bucket_map = _merge_buckets(initial_bucket_map)
-    for name, bucket in merged_bucket_map:
+    for name, bucket in merged_bucket_map.items():
         m, n = bucket.max_m, bucket.max_n
         factor_type = bucket.factor_type
         merged_bucket_map[name] = bucket._replace(rank=_pick_rank(m, n, factor_type, rank_type, rank_val))

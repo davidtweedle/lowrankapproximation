@@ -61,10 +61,10 @@ def _is_shape_info(x):
 def _is_weight_block(x):
     if isinstance(x, collections.abc.Mapping):
         has_target = any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
-        if not has_target and 'bias' in x:
-            logging.info(f"DEBUG: Found dict with 'bias' but no kernel. Keys: {list(x.keys())}")
-        if has_target:
-            logging.info(f"DEBUG: Found weight block with keys: {list(x.keys())}")
+#        if not has_target and 'bias' in x:
+#            logging.info(f"DEBUG: Found dict with 'bias' but no kernel. Keys: {list(x.keys())}")
+#        if has_target:
+#            logging.info(f"DEBUG: Found weight block with keys: {list(x.keys())}")
         return has_target
     return False
 

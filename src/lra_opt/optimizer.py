@@ -27,6 +27,8 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from absl import logging
+
 from flax import struct
 
 from . import linalg
@@ -221,19 +223,19 @@ def compute_bucket_structure(shape_info_tree: Any, params: Any, rank_type: str, 
         factor_type = bucket.factor_type
         merged_bucket_map[name] = bucket._replace(rank=_pick_rank(m, n, factor_type, rank_type, rank_val))
     final_map = merged_bucket_map | special_bucket_map
-    print("\n--- Optimizer Bucket Initialization Log ---")
+    logging.info("\n--- Optimizer Bucket Initialization Log ---")
     total_layers = sum(len(b.layer_paths) for b in final_map.values())
     total_unique_shapes = len(final_map)
-    print(f"Total Layers Partitioned: {total_layers}")
-    print(f"Total Unique Buckets: {total_unique_shapes}")
+    logging.info(f"Total Layers Partitioned: {total_layers}")
+    logging.info(f"Total Unique Buckets: {total_unique_shapes}")
     for name, bucket in final_map.items():
         num_layers = len(bucket.layer_paths)
-        print(f"\nBucket Name: {name} ({num_layers} layers)")
-        print(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
-        print(f" Dtype: {bucket.dtype}")
-        print(f" Factor type: {bucket.factor_Type}")
-        print(f" Total elements in Bucket Tensor: {num_layers * bucket.max_m * bucket.max_n}")
-    print("---------------------")
+        logging.info(f"\nBucket Name: {name} ({num_layers} layers)")
+        logging.info(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
+        logging.info(f" Dtype: {bucket.dtype}")
+        logging.info(f" Factor type: {bucket.factor_Type}")
+        logging.info(f" Total elements in Bucket Tensor: {num_layers * bucket.max_m * bucket.max_n}")
+    logging.info("---------------------")
     return final_map
 
 def _merge_buckets(initial_bucket_map):
@@ -275,7 +277,7 @@ def _merge_buckets(initial_bucket_map):
             del ActiveBuckets[j]
             ActiveBuckets[i] = (area_A + area_B, bucket_merged)
         else:
-            print(f"Stopping merge: Best cost was {best_cost:.2f}k which is > {tau_pad}")
+            logging.info(f"Stopping merge: Best cost was {best_cost:.2f}k which is > {tau_pad}")
             break
     final_bucket_map = {}
     for _, bucket in ActiveBuckets:
@@ -518,10 +520,10 @@ def scale_by_low_rank_orthogonal_update(
             else:
                 raise ValueError(f"Parameter at path {path} was not assigned to a bucket.")
 
-        leaves = [l for _, l, in leaves_with_path]
-        zero_leaves = [{k: jnp.zeros_like(v) for k, v in leaf.items()} for leaf in leaves]
-        batched_momentum = _tree_to_bucketed_tensors(zero_leaves, leaf_locs, bucket_structure)
-
+        batched_momentum = {
+                name: jnp.zeros((len(b.layer_paths), b.max_m, b.max_n), dtype=b.dtype)
+                for name, b in bucket_structure.items()
+                }
 
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),

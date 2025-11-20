@@ -60,7 +60,7 @@ def _is_shape_info(x):
 
 def _is_weight_block(x):
     if isinstance(x, collections.abc.Mapping):
-        has_target = any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
+        has_target = any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head', 'weights'))
 #        if not has_target and 'bias' in x:
 #            logging.info(f"DEBUG: Found dict with 'bias' but no kernel. Keys: {list(x.keys())}")
 #        if has_target:
@@ -80,9 +80,16 @@ def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """
     if len(weight_shape) <= 2:
         return tuple(int(d) for d in weight_shape)
-
-    out_dim = int(weight_shape[-1])
-    in_dim = int(math.prod(int(d) for d in weight_shape[:-1]))
+    
+    if len(weight_shape) == 3:
+        d0, d1, d2 = weight_shape
+        if d0 > d1:  #QKV kernel
+            return (int(d0), int(d1 * d2))
+        else:  # out proj
+            return (int(d0 * d1), int(d2))
+    if len(weight_shape) > 3:
+        out_dim = int(weight_shape[-1])
+        in_dim = int(math.prod(int(d) for d in weight_shape[:-1]))
     return (in_dim, out_dim)
 
 def _compute_shape_info(params):
@@ -96,12 +103,7 @@ def _compute_shape_info(params):
     """
 
     def classify_subtree(subtree):
-        if isinstance(subtree, dict) and (
-                'kernel' in subtree or
-                'embedding' in subtree or
-                'embedding_table' in subtree or
-                'lm_head' in subtree
-                ):
+        if _is_weight_block(subtree):
             if 'bias' in subtree:
                 bias = subtree['bias']
                 bias_name = 'bias'
@@ -118,6 +120,8 @@ def _compute_shape_info(params):
                 kernel_name = 'embedding_table'
             elif 'lm_head' in subtree:
                 kernel_name = 'lm_head'
+            elif 'weights' in subtree:
+                kernel_name = 'weights'
             kernel = subtree[kernel_name]
             kernel_shape = kernel.shape
             dtype = kernel.dtype

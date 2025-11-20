@@ -30,6 +30,7 @@ import optax
 from absl import logging
 
 from flax import struct
+from flax.core import FrozenDict
 
 from . import linalg
 
@@ -57,7 +58,7 @@ def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
 def _is_weight_block(x):
-    return isinstance(x, dict) and any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
+    return isinstance(x, (dict, FrozenDict)) and any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
 
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """
@@ -305,10 +306,13 @@ def _tree_to_bucketed_tensors(
         leaf_locs: List[Tuple],
         bucket_structure: Dict[str, LayerBucket],
         ) -> Dict[str, jnp.ndarray]:
-    batched_tensors = {
-            name: jnp.zeros((len(b.layer_paths), b.max_m, b.max_n), dtype=b.dtype) for name, b in bucket_structure.items()
+    bucket_lists = {
+            name: [None] * len(b.layer_paths)
+            for name, b in bucket_structure.items()
             }
     for leaf, loc in zip(leaves, leaf_locs):
+        if loc is None:
+            continue
         bucket_name, idx, info = loc
         max_m = bucket_structure[bucket_name].max_m
         max_n = bucket_structure[bucket_name].max_n
@@ -321,7 +325,10 @@ def _tree_to_bucketed_tensors(
         if info.bias_name is not None:
             bias_flat = leaf[info.bias_name].reshape(-1)
             padded_matrix = padded_matrix.at[m, :bias_flat.shape[0]].set(bias_flat)
-        batched_tensors[bucket_name] = batched_tensors[bucket_name].at[idx].set(padded_matrix)
+        bucket_lists[bucket_name][idx] = padded_matrix
+    batched_tensors = {
+            name: jnp.stack(mats) for name, mats in bucket_lists.items()
+            }
     return batched_tensors
 
 #    for bucket_name, bucket in bucket_structure.items():
@@ -345,11 +352,15 @@ def _tree_to_bucketed_tensors(
 
 def _bucketed_tensors_to_tree(
         batched_precond: Dict[str, jnp.ndarray],
-        bucket_structure: Dict[str, LayerBucket],
+        leaf_locs: List[Optional[Tuple]],
         treedef: Any,
+        original_leaves: List[Any],
         ):  # spec.ParameterContainer?
     new_leaves = []
     for loc in leaf_locs:
+        if loc is None:
+            new_leaves.append(original_leaves[i])
+            continue
         bucket_name, idx, info = loc
         precond_tensor = batched_precond[bucket_name][idx]
         m, n = info.reshaped_2d
@@ -518,7 +529,8 @@ def scale_by_low_rank_orthogonal_update(
             if path in path_to_bucket:
                 leaf_locs.append(path_to_bucket[path])
             else:
-                raise ValueError(f"Parameter at path {path} was not assigned to a bucket.")
+                leaf_locs.append(None)
+
 
         batched_momentum = {
                 name: jnp.zeros((len(b.layer_paths), b.max_m, b.max_n), dtype=b.dtype)
@@ -568,6 +580,7 @@ def scale_by_low_rank_orthogonal_update(
                 batched_updates,
                 state.leaf_locs,
                 state.treedef,
+                update_laeves
                 )
 
         new_state = ScaleByLowRankOrthogonalUpdateState(

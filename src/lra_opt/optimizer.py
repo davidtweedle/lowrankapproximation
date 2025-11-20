@@ -586,7 +586,7 @@ def scale_by_low_rank_orthogonal_update(
         new_state = ScaleByLowRankOrthogonalUpdateState(
                 step=step_inc,
                 momentum=batched_updated_momentum,
-                key=step_key,
+                key=new_state_key,
                 bucket_structure=state.bucket_structure,
                 treedef=state.treedef,
                 leaf_locs=state.leaf_locs

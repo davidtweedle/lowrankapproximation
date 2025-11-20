@@ -81,9 +81,9 @@ def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     if len(weight_shape) <= 2:
         return tuple(int(d) for d in weight_shape)
 
-    first_dim = int(weight_shape[0])
-    rest_dim = int(math.prod(int(d) for d in weight_shape[1:]))
-    return (first_dim, rest_dim)
+    out_dim = int(weight_shape[-1])
+    in_dim = int(math.prod(int(d) for d in weight_shape[:-1]))
+    return (in_dim, out_dim)
 
 def _compute_shape_info(params):
     """
@@ -583,6 +583,7 @@ def scale_by_low_rank_orthogonal_update(
                     updated_momentum,
                     use_key,
                     rank,
+                    krylov_iter,
                     factor_type,
                     )
         tree_updates = _bucketed_tensors_to_tree(

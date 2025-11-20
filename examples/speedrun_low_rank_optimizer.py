@@ -4,16 +4,16 @@ import jax
 import optax
 
 from levanter.optim import OptimizerConfig
-from levanter.trainer import SimpleTrainConfig
+from experiments.simple_train_config import SimpleTrainConfig
 
-from marin.speedrun import SpeedrunConfig, default_speedrun
-from marin.executor import executor_main
-from marin.reporting import Author
-from levanter.config import GpuConfig
+from marin.execution.executor import executor_main
+from marin.resources import GpuConfig
+from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+
+from experiments.llama import llama_75m
 
 from lra_opt.optimizer import low_rank_orthogonal_update, create_param_labels
 
-from marin.models.llama_configs import llama_75m
 
 @dataclass
 class LowRankOrthogonalConfig(OptimizerConfig):
@@ -27,7 +27,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
     rank_type: str = "sqrt"
     rank_val: int | None = None
 
-    seed: int = 0
+    seed: int = 13
 
     def build(self, num_train_steps: int):
         print(f"Building optimizer: {self.__class__.__name__}")
@@ -35,7 +35,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
             OptimizerConfig.register_subclass("low_rank_orthogonal")(LowRankOrthogonalConfig)
         except ValueError:
             pass
-        param_labels_fn = create_param_labels()
+        param_label_fn = create_param_labels()
 
         def _optimizer(learning_rate):
             key = jax.random.key(self.seed)
@@ -47,7 +47,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
                     krylov_iter=self.krylov_iter,
                     rank_type=self.rank_type,
                     rank_val=self.rank_val,
-                    labels=param_labels_fn,
+                    param_label_fn=param_label_fn,
                     eps=self.eps,
                     eps_root=self.eps_root,
                     weight_decay=self.weight_decay,
@@ -74,20 +74,22 @@ speedrun_config = SpeedrunConfig(
         model_config=llama_75m,
         train_config=SimpleTrainConfig(
             GpuConfig(
-                backend="nccl",
-                num_devices=4,
+                gpu_count=4,
+                accelerator_type="A100",
                 ),
             train_batch_size=512,
             num_train_steps=6000,
             steps_per_eval=2000,
             optimizer_config=LowRankOrthogonalConfig(
                 learning_rate=3e-4,
+                weight_decay=0.1,
                 warmup=500,
-                decay="cos",
                 min_lr_ratio=0.1,
                 ),
             ),
         )
+
+speedrun_config.print_run_info()
 
 if __name__ == "__main__":
     executor_main(steps=default_speedrun("llama_75m_low_rank_orthogonal", speedrun_config))

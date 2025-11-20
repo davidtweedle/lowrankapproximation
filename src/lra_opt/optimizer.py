@@ -242,7 +242,7 @@ def compute_bucket_structure(shape_info_tree: Any, params: Any, rank_type: str, 
         logging.info(f"\nBucket Name: {name} ({num_layers} layers)")
         logging.info(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
         logging.info(f" Dtype: {bucket.dtype}")
-        logging.info(f" Factor type: {bucket.factor_Type}")
+        logging.info(f" Factor type: {bucket.factor_type}")
         logging.info(f" Total elements in Bucket Tensor: {num_layers * bucket.max_m * bucket.max_n}")
     logging.info("---------------------")
     return final_map

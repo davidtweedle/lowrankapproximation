@@ -157,7 +157,7 @@ def _compute_shape_info(params):
 class LayerBucket(NamedTuple):
     max_m: int
     max_n: int
-    rank: int
+    rank: int = 0
     layer_paths: List[Tuple[str, ...]]
     shape_infos: List[AugmentedShapeInfo]
     dtype: jnp.dtype

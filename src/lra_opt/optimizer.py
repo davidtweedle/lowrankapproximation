@@ -29,6 +29,8 @@ import optax
 
 from absl import logging
 
+import collections.abc
+
 from flax import struct
 
 from . import linalg
@@ -57,8 +59,13 @@ def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
 def _is_weight_block(x):
-    if hasattr(x, 'get'):
-        return any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
+    if isinstance(x, collections.abc.Mapping):
+        has_target = any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
+        if not has_target and 'bias' in x:
+            logging.info(f"DEBUG: Found dict with 'bias' but no kernel. Keys: {list(x.keys())}")
+        if has_target:
+            logging.info(f"DEBUG: Found weight block with keys: {list(x.keys())}")
+        return has_target
     return False
 
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:

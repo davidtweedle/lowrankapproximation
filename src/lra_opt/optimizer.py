@@ -580,7 +580,7 @@ def scale_by_low_rank_orthogonal_update(
                 batched_updates,
                 state.leaf_locs,
                 state.treedef,
-                update_laeves
+                update_leaves
                 )
 
         new_state = ScaleByLowRankOrthogonalUpdateState(

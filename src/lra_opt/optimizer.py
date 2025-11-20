@@ -30,7 +30,6 @@ import optax
 from absl import logging
 
 from flax import struct
-from flax.core import FrozenDict
 
 from . import linalg
 
@@ -58,7 +57,9 @@ def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
 def _is_weight_block(x):
-    return isinstance(x, (dict, FrozenDict)) and any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
+    if hasattr(x, 'get'):
+        return any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head'))
+    return False
 
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """

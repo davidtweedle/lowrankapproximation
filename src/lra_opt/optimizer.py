@@ -157,11 +157,11 @@ def _compute_shape_info(params):
 class LayerBucket(NamedTuple):
     max_m: int
     max_n: int
-    rank: int = 0
     layer_paths: List[Tuple[str, ...]]
     shape_infos: List[AugmentedShapeInfo]
     dtype: jnp.dtype
     factor_type: str
+    rank: int = 0
 
 def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
     if factor_type == 'qr_with_pivot':

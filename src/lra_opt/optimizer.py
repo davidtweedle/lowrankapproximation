@@ -357,7 +357,7 @@ def _bucketed_tensors_to_tree(
         original_leaves: List[Any],
         ):  # spec.ParameterContainer?
     new_leaves = []
-    for loc in leaf_locs:
+    for i, loc in enumerate(leaf_locs):
         if loc is None:
             new_leaves.append(original_leaves[i])
             continue

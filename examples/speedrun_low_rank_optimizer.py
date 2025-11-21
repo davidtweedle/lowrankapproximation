@@ -80,6 +80,7 @@ speedrun_config = SpeedrunConfig(
             num_train_steps=6000,
             steps_per_eval=2000,
             learning_rate=3e-4,
+            weight_decay=0.1,
             axis_resources={
                 'batch': 'data',
                 'vocab': None,

@@ -1,3 +1,18 @@
+from levanter.trainer import TrainerConfig
+_orig_init = TrainerConfig.__init__
+def _new_init(self, *args, **kwargs):
+    if 'axis_resources' not in kwargs or kwargs['axis_resources'] is None:
+        kwargs['axis_resources'] = {
+                'batch': 'data',
+                'vocab': None,
+                'mlp': None,
+                'embed': None,
+                'heads': None,
+                'kv_heads': None,
+                }
+    _orig_init(self, *args, **kwargs)
+
+TrainerConfig.__init__ = _new_init
 from dataclasses import dataclass
 
 import jax

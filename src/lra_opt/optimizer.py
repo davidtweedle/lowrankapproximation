@@ -359,7 +359,7 @@ def _tree_to_bucketed_tensors(
         if loc is None:
             continue
 
-        if isinstance(leaf, collections.abs.Mapping):
+        if isinstance(leaf, collections.abc.Mapping):
             get_param = lambda key: leaf[key]
         else:
             get_param = lambda key: getattr(leaf, key)

@@ -476,11 +476,15 @@ def scale_by_low_rank_orthogonal_update(
                 name: jnp.zeros((len(b.groups), b.max_m, b.max_n), dtype=b.dtype)
                 for name, b in bucket_structure.items()
                 }
+        if hasattr(jax.random, 'key_data'):
+            key_raw = jax.random.key_data(key)
+        else:
+            key_raw = key
         return ScaleByLowRankOrthogonalUpdateState(
                 step=jnp.zeros([], jnp.int32),
                 bucket_structure=bucket_structure,
                 momentum=batched_momentum,
-                key=key,
+                key=key_raw,
                 treedef=treedef,
                 leaf_map=leaf_map,
                 )
@@ -494,10 +498,17 @@ def scale_by_low_rank_orthogonal_update(
                 state.leaf_map,
                 state.bucket_structure
                 )
+        rng_key = state.key
+        if hasattr(jax.random, 'wrap_key_data'):
+            rng_key = jax.random.wrap_key_data(state.key, impl='threefry2x32')
 
         num_buckets = len(state.bucket_structure)
-        master_bucket_key, new_state_key = jax.random.split(state.key, 2)
+        master_bucket_key, new_state_key_obj = jax.random.split(rng_key, 2)
         bucket_keys = jax.random.split(master_bucket_key, num_buckets)
+        if hasattr(jax.random, 'key_data'):
+            new_state_key = jax.random.key_data(new_state_key_obj)
+        else:
+            new_state_key = new_state_key_obj
         batched_momentum = state.momentum
         bucket_items = list(state.bucket_structure.items())
         batched_updated_momentum = {}

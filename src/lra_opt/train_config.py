@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any, Union, List
 
 from levanter.trainer import TrainerConfig
 from levanter.optim import OptimizerConfig
-from levanter.tracker.wandb import WandbConfig, WandbWatchConfig
+from levanter.tracker.wandb import WandbConfig
 from marin.resources import GpuConfig, TpuPodConfig
 
 @dataclass
@@ -77,7 +77,6 @@ class LraTrainConfig:
             ema_decay=self.ema_beta,
             load_checkpoint_path=self.load_checkpoint_path,
             wandb=wandb_config,
-            watch=watch_config,
             # --- PASS THE SHARDING CONFIG ---
             axis_resources=self.axis_resources,
         )

@@ -59,12 +59,21 @@ def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
 def _is_weight_block(x):
+    kernel = None
     if hasattr(x, 'weight') and x.weight is not None:
-        return True
-
-    if isinstance(x, collections.abc.Mapping):
-        return any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head', 'weights'))
-
+        kernel = x.weight
+    elif isinstance(x, collections.abc.Mapping):
+        for k in ('kernel', 'embedding', 'embedding_table', 'lm_head', 'weights'):
+            if k in x:
+                kernel = x[k]
+                break
+    if kernel is None:
+        return False
+    if isinstance(kernel, optax.MaskedNode):
+        return False
+    kernel = _get_raw_array(kernel)
+    if hasattr(kernel, 'ndim'):
+        return kernel.ndim >= 2
     return False
 
 def _get_raw_array(tensor):

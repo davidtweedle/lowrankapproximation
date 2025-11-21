@@ -36,7 +36,7 @@ class LraTrainConfig:
     profiler_num_steps: int = -1
 
     z_loss_weight: float = 0.0
-    loss_scale: Optioanl[float] = None
+    loss_scale: Optional[float] = None
 
     ema_beta: Optional[float] = None
 

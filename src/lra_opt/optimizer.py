@@ -19,55 +19,22 @@ from typing import (
         NamedTuple,
         Optional,
         Tuple,
+        Union,
         )
 
 import collections
+import collections.abc
 import chex
 import jax
 import jax.numpy as jnp
 import optax
-
 from absl import logging
-
-import collections.abc
-
 from flax import struct
+
 
 from . import linalg
 
 
-# parameter names -- 'scale','bias' -- LayerNorm/BatchNorm (Apply nadamw)
-# 'kernel', 'embedding_table', 'embedding' -- higher-dimensional tensors to apply low rank orthogonal updates
-
-
-
-#@struct.dataclass
-#class AugmentedShapeInfo:
-#    """
-#    Class to keep track of transformations between 'kernel', 'bias' pairs and augmented matrix
-#    """
-#    kernel_name: str            = struct.field(pytree_node=False)    # name of kernel weight
-#    kernel_shape: tuple         = struct.field(pytree_node=False)    # shape of original kernel tensor
-#    bias_name: Optional[str]    = struct.field(pytree_node=False)    # name of bias weight
-#    bias_shape: Optional[tuple] = struct.field(pytree_node=False)     # shape of original bias tensor
-#    reshaped_2d: tuple          = struct.field(pytree_node=False)# shape of kernel reshaped as matrix
-#    augmented_shape: tuple      = struct.field(pytree_node=False)# final shape of augmented matrix (after transposing)
-#    factor_type: str            = struct.field(pytree_node=False)    # can be 'wide', 'tall', 'qr_with_pivot'
-#    dtype: jnp.dtype            = struct.field(pytree_node=False)
-#
-#def _is_shape_info(x):
-#    return isinstance(x, AugmentedShapeInfo)
-#
-#def _is_weight_block(x):
-##    x = _get_raw_array(x)
-##    if not hasattr(x, 'shape') or not hasattr(x, 'dtype'):
-#        return False
-#    if not jnp.issubdtype(x.dtype, jnp.floating):
-#        return False
-#    if len(x.shape) < 2:
-        return False
-#    return False
-#
 def _get_raw_array(tensor):
     if hasattr(tensor, "array") and hasattr(tensor, "axes"):
         return tensor.array
@@ -110,91 +77,6 @@ class ParameterGroup:
     factor_type: str = struct.field(pytree_node=False)
     dtype: Any = struct.field(pytree_node=False)
 
-#def _compute_shape_info(params):
-#    """
-#    Compute shape info for all parameters corresponding to
-#    'kernel', 'embedding' or 'embedding_table'
-#    In other words, all 2 or higher dimensional tensors that are parameters
-#    of the model.
-#    If the 'kernel', 'embedding' or 'embedding_table' is found, then it is combined
-#    with its 'bias', if there is a corresponding 'bias'.
-#    """
-#
-#    def classify_subtree(subtree):
-#        if _is_weight_block(subtree):
-#            if isinstance(subtree, collections.abc.Mapping):
-#                get_param = lambda key: subtree[key]
-#                has_param = lambda key: key in subtree
-#                all_keys = subtree.keys()
-#            else:
-#                get_param = lambda key: getattr(subtree, key)
-#                has_param = lambda key: hasattr(subtree, key) and getattr(subtree, key) is not None
-#                all_keys = dir(subtree)
-#            if has_param('weight'):
-#                kernel_name = 'weight'
-#            elif has_param('kernel'):
-#                kernel_name = 'kernel'
-#            elif has_param('embedding'):
-##                kernel_name = 'embedding'
-##            elif has_param('embedding_table'):
-##                kernel_name = 'embedding_table'
-#            elif has_param('lm_head'):
-#                kernel_name = 'lm_head'
-#            else:
-#                return None
-#
-#            if has_param('bias'):
-#                bias_wrapper = get_param('bias')
-#                if bias_wrapper is None:
-##                    bias_name = None
-#                    bias_shape = None
-#                else:
-#                    bias_name = 'bias'
-##                    bias_raw = _get_raw_array(bias_wrapper)
-#                    bias_shape = bias_raw.shape
-#            else:
-#                bias = None
-#                bias_name = None
-#                bias_shape = None
-#            try:
-#                kernel_wrapper = get_param(kernel_name)
-#                kernel_raw = _get_raw_array(kernel_wrapper)
-#                kernel_shape = kernel_raw.shape
-#                dtype = kernel_raw.dtype
-#            except AttributeError:
-#                return None
-#
-#            reshaped_2d = _reshape_to_2d(kernel_shape, bias_shape)
-#            m, n = reshaped_2d
-#            extra = 1 if bias_name is not None else 0
-#            augmented_shape = (m + extra, n)
-#            if kernel_name in {'embedding', 'embedding_table'}:
-#                factor_type = 'qr_with_pivot'
-#            elif kernel_name == 'lm_head':
-#                factor_type = 'qr_with_pivot_transpose'
-#            elif m + extra >= n:
-#                factor_type = 'tall'
-#            else:
-#                factor_type = 'wide'
-#
-#            return AugmentedShapeInfo(
-#                    kernel_shape=kernel_shape,
-#                    kernel_name=kernel_name,
-#                    bias_shape=bias_shape,
-#                    bias_name=bias_name,
-#                    reshaped_2d=reshaped_2d,
-#                    augmented_shape=augmented_shape,
-#                    factor_type=factor_type,
-#                    dtype=dtype,
-#                    )
-#        else:
-#            return None
-#
-#    return jax.tree.map(
-#            classify_subtree,
-#            params,
-#            is_leaf=_is_weight_block
-#            )
 
 class LayerBucket(NamedTuple):
     max_m: int
@@ -218,7 +100,6 @@ def _analyze_tree_and_build_buckets(
         ) -> Tuple[Dict[str, LayerBucket], Dict[int, Tuple[str, int, str]]]:
     leaves, treedef = jax.tree.flatten_with_path(params)
     path_to_info = {}
-    valid_indices = set()
     for i, (path, leaf) in enumerate(leaves):
         if isinstance(leaf, optax.MaskedNode):
             continue
@@ -226,7 +107,6 @@ def _analyze_tree_and_build_buckets(
         if not hasattr(raw, 'shape') or not hasattr(raw, 'dtype'):
             continue
         path_to_info[path] = (i, raw)
-        valid_indices.add(i)
 
     groups: List[ParameterGroup] = []
     consumed_indices = set()
@@ -316,18 +196,18 @@ def _analyze_tree_and_build_buckets(
     merged_buckets = _merge_buckets(final_buckets)
     merged_buckets.update(special_bucket_map)
     leaf_to_bucket = {}
-    for b_name, bucket in final_buckets.items():
+    for b_name, bucket in merged_buckets.items():
         for g_idx, group in enumerate(bucket.groups):
             leaf_to_bucket[group.weight_leaf_idx] = (b_name, g_idx, 'weight')
             if group.bias_leaf_idx is not None:
                 leaf_to_bucket[group.bias_leaf_idx] = (b_name, g_idx, 'bias')
 
     logging.info("\n--- Optimizer Bucket Initialization Log ---")
-    total_layers = sum(len(b.layer_paths) for b in final_map.values())
-    total_unique_shapes = len(final_map)
+    total_layers = sum(len(b.layer_paths) for b in merged_buckets.values())
+    total_unique_shapes = len(merged_buckets)
     logging.info(f"Total Layers Partitioned: {total_layers}")
     logging.info(f"Total Unique Buckets: {total_unique_shapes}")
-    for name, bucket in final_map.items():
+    for name, bucket in merged_buckets.items():
         num_layers = len(bucket.layer_paths)
         logging.info(f"\nBucket Name: {name} ({num_layers} layers)")
         logging.info(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
@@ -337,9 +217,6 @@ def _analyze_tree_and_build_buckets(
     logging.info("---------------------")
 
     return merged_buckets, leaf_to_bucket
-
-
-
 
 
 def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
@@ -362,69 +239,6 @@ def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
     r_po2 = 1 << (r - 1).bit_length()
     return r_po2
 
-
-#def compute_bucket_structure(shape_info_tree: Any, params: Any, rank_type: str, rank_val: int = None) -> Dict[str, LayerBucket]:
-#    leaves_with_paths, treedef = jax.tree.flatten_with_path(shape_info_tree, is_leaf=_is_shape_info)
-#    valid_layers = []
-#    for path, leaf in leaves_with_paths:
-#        if isinstance(leaf, AugmentedShapeInfo):
-#            valid_layers.append((path, leaf))
-#    buckets_by_shape = collections.defaultdict(list)
-#    special_bucket_map = {}
-#    for path, info in valid_layers:
-#        is_special_layer = info.kernel_name in {'embedding', 'embedding_table', 'lm_head'}
-#        M, N = info.augmented_shape
-#        if is_special_layer:
-#            bucket_name = f"Special_{info.kernel_name}_{M}x{N}_idx{len(initial_bucket_map)}"
-#            m, n = info.reshaped_2d
-#            rank = _pick_rank(m, n, info.factor_type, rank_type, rank_val)
-#            special_bucket_map[bucket_name] = LayerBucket(
-#                    max_m=M,
-#                    max_n=N,
-#                    dtype=info.dtype,
-#                    layer_paths=[path],
-#                    shape_infos=[info],
-#                    factor_type=info.factor_type,
-#                    rank=rank
-#                    )
-#        else:
-#            buckets_by_shape[(M, N, info.factor_type, info.dtype)].append((path, info))
-#    initial_bucket_map = {}
-#
-#    for (M, N, factor_type, dtype), layer_list in buckets_by_shape.items():
-#        bucket_name = f"Bucket_{M}x{N}"
-#        max_m, max_n = M, N
-#        layer_paths = [item[0] for item in layer_list]
-#        shape_infos = [item[1] for item in layer_list]
-#
-#        initial_bucket_map[bucket_name] = LayerBucket(
-#                max_m=max_m,
-#                max_n=max_n,
-#                layer_paths=layer_paths,
-#                shape_infos=shape_infos,
-#                dtype=dtype,
-#                factor_type=factor_type,
-#                )
-#    merged_bucket_map = _merge_buckets(initial_bucket_map)
-#    for name, bucket in merged_bucket_map.items():
-#        m, n = bucket.max_m, bucket.max_n
-#        factor_type = bucket.factor_type
-#        merged_bucket_map[name] = bucket._replace(rank=_pick_rank(m, n, factor_type, rank_type, rank_val))
-#    final_map = merged_bucket_map | special_bucket_map
-#    logging.info("\n--- Optimizer Bucket Initialization Log ---")
-#    total_layers = sum(len(b.layer_paths) for b in final_map.values())
-#    total_unique_shapes = len(final_map)
-#    logging.info(f"Total Layers Partitioned: {total_layers}")
-#    logging.info(f"Total Unique Buckets: {total_unique_shapes}")
-#    for name, bucket in final_map.items():
-#        num_layers = len(bucket.layer_paths)
-#        logging.info(f"\nBucket Name: {name} ({num_layers} layers)")
-#        logging.info(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
-#        logging.info(f" Dtype: {bucket.dtype}")
-#        logging.info(f" Factor type: {bucket.factor_type}")
-#        logging.info(f" Total elements in Bucket Tensor: {num_layers * bucket.max_m * bucket.max_n}")
-#    logging.info("---------------------")
-#    return final_map
 
 def _merge_buckets(initial_bucket_map):
     ActiveBuckets: List[Tuple(int, LayerBucket)] = [(bucket.max_m * bucket.max_n, bucket) for bucket in initial_bucket_map.values() ]
@@ -455,12 +269,13 @@ def _merge_buckets(initial_bucket_map):
 
             M_new = max(bucket_A.max_m, bucket_B.max_m)
             N_new = max(bucket_A.max_n, bucket_B.max_n)
-            bucket_merged = Layer_Bucket(
+            bucket_merged = LayerBucket(
                     max_m=M_new,
                     max_n=N_new,
-                    layer_paths=bucket_A.layer_paths + bucket_B.layer_paths,
-                    shape_infos=bucket_A.shape_infos + bucket_B.shape_infos,
-                    dtype=bucket_A.dtype
+                    rank=max(bucket_A.rank, bucket_B.rank),
+                    groups=bucket_A.groups + bucket_B.groups,
+                    dtype=bucket_A.dtype,
+                    factor_type=bucket_A.factor_type
                     )
             del ActiveBuckets[j]
             ActiveBuckets[i] = (area_A + area_B, bucket_merged)
@@ -535,145 +350,6 @@ def _bucketed_tensors_to_tree(
             new_leaves.append(update)
     return jax.tree.unflatten(treedef, new_leaves)
 
-#def _get_leaf_by_key_path(tree: Any, path: Tuple) -> Any:
-#    res = tree
-#    for key_node in path:
-#        if isinstance(key_node, (DictKey, FieldKey, GetAttrKey)):
-#            key_val = key_node.key if hasattr(key_node, 'key') else key_node.name
-#        elif isinstance(key_node, SequenceKey):
-#            key_val = key_node.idx
-#        else:
-#            raise TypeError(f"Unknown JAX Key type in path: {type(key_node)}")
-#        res = res[key_val]
-#    return res
-
-#def _tree_to_bucketed_tensors(
-#        leaves: List[Any],
-#        leaf_locs: List[Tuple],
-#        bucket_structure: Dict[str, LayerBucket],
-#        ) -> Dict[str, jnp.ndarray]:
-#    bucket_lists = {
-#            name: [None] * len(b.layer_paths)
-#            for name, b in bucket_structure.items()
-#            }
-#    for leaf, loc in zip(leaves, leaf_locs):
-#        if loc is None:
-#            continue
-#
-#        if isinstance(leaf, collections.abc.Mapping):
-#            get_param = lambda key: leaf[key]
-#        else:
-#            get_param = lambda key: getattr(leaf, key)
-#
-#        bucket_name, idx, info = loc
-#        max_m = bucket_structure[bucket_name].max_m
-#        max_n = bucket_structure[bucket_name].max_n
-#
-#        padded_matrix = jnp.zeros((max_m, max_n), dtype=info.dtype)
-#        m, n = info.reshaped_2d
-#        kernel_wrapper = get_param(info.kernel_name)
-#        kernel_raw = _get_raw_array(kernel_wrapper)
-#        kernel = kernel_raw.reshape(m, n)
-#        padded_matrix = padded_matrix.at[:m, :n].set(kernel)
-#
-#        if info.bias_name is not None:
-#            bias_wrapper = get_param(info.bias_name)
-#            bias_raw = _get_raw_array(bias_wrapper)
-#            bias_flat = bias_raw.reshape(-1)
-#            padded_matrix = padded_matrix.at[m, :bias_flat.shape[0]].set(bias_flat)
-#        bucket_lists[bucket_name][idx] = padded_matrix
-#    batched_tensors = {
-#            name: jnp.stack(mats) for name, mats in bucket_lists.items()
-#            }
-#    return batched_tensors
-#
-#    for bucket_name, bucket in bucket_structure.items():
-#        M_max, N_max = bucket.max_m, bucket.max_n
-#        num_layers = len(bucket.layer_paths)
-#        dtype = bucket.dtype
-#        bucket_tensor = jnp.zeros((num_layers, M_max, N_max), dtype=dtype)
-#        for i, (path, info) in enumerate(zip(bucket.layer_paths, bucket.shape_infos)):
-#            M_i, N_i = info.augmented_shape
-#            padded_matrix = jnp.zeros((bucket.max_m, bucket.max_n), dtype=bucket.dtype)
-#            layer = _get_leaf_by_key_path(updates, path)
-#            m, n = info.reshaped_2d
-#            kernel = layer[info.kernel_name].reshape(m, n)
-#            padded_matrix = padded_matrix.at[:m, :n].set(kernel)
-#            if info.bias_name is not None:
-#                b2d = layer[info.bias_name].reshape(1, -1)
-#                padded_matrix = padded_matrix.at[m: m + 1, :n].set(b2d)
-#            bucket_tensor = bucket_tensor.at[i].set(padded_matrix)
-#        batched_tensors[bucket_name] = bucket_tensor
-#    return batched_tensors
-
-#def _bucketed_tensors_to_tree(
-#        batched_precond: Dict[str, jnp.ndarray],
-#        leaf_locs: List[Optional[Tuple]],
-#        treedef: Any,
-#        original_leaves: List[Any],
-#        ):  # spec.ParameterContainer?
-#    new_leaves = []
-#    for i, loc in enumerate(leaf_locs):
-#        if loc is None:
-#            new_leaves.append(original_leaves[i])
-#            continue
-#        bucket_name, idx, info = loc
-#        precond_tensor = batched_precond[bucket_name][idx]
-#        m, n = info.reshaped_2d
-#        layer_precond_unpadded = precond_tensor[:m, :n]
-#        layer_updates_dict = {}
-#        layer_updates_dict[info.kernel_name] = layer_precond_unpadded.reshape(info.kernel_shape)
-#        if info.bias_name is not None:
-#            bias_len = math.prod(info.bias_shape)
-#            layer_bias = precond_tensor[m, :bias_len]
-#            layer_updates_dict[info.bias_name] = layer_bias.reshape(info.bias_shape)
-#        new_leaves.append(layer_updates_dict)
-#    return jax.tree.unflatten(treedef, new_leaves)
-#    updates_flat = {} # {path_tuple: update_matrix,....}
-#    for bucket_name, precond_tensor in batched_precond.items():
-#        bucket = bucket_structure[bucket_name]
-#        for i, (path, info) in enumerate(zip(bucket.layer_paths, bucket.shape_infos)):
-#            layer_precond_padded = precond_tensor[i]
-#            m, n = info.reshaped_2d
-#            layer_precond_unpadded = layer_precond_padded[:m, :n]
-#            layer_updates_dict = {}
-#            layer_updates_dict[info.kernel_name] = layer_precond_unpadded.reshape(info.original_shape)
-#            if info.bias_name is not None:
-#                layer_bias = layer_precond_padded[m : m + 1, :n]
-#                layer_updates_dict[info.bias_name] = layer_bias.reshape(info.original_bias_shape)
-#
-#            updates_flat[path] = layer_updates_dict
-#    final_updates_tree = jax.tree.unflatten(updates_flat, original_template_tree)
-#    return final_updates_tree
-
-
-#def create_param_labels() -> Callable:
-#    """
-#    Label the leaves of a Pytree according to whether the parameter
-#    should be an "Adam" parameter, or updated using low rank orthogonal updates.
-#
-#    Returns a function that labels each parameter in a pytree as either
-#    - 'adam': for parameters of Layernorm or Batchnorm
-#    - 'low_rank_orthogonal_update': for weight matrices paired with their bias
-#
-#    Returns:
-#        Callable: Function that takes params and returns labelled Pytree
-#    """
-#    def param_labels(params):
-#        shape_info = _compute_shape_info(params)
-#
-#        def label_param(info):
-#            if info is None:
-#                return 'adam'
-#            else:
-#                return 'low_rank_orthogonal_update'
-#
-#        return jax.tree.map(
-#                label_param,
-#                shape_info,
-#                is_leaf=lambda x: x is None or _is_shape_info(x)
-#                )
-#    return param_labels
 
 def create_param_labels() -> Callable:
     def label_fn(params):

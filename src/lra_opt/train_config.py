@@ -25,6 +25,8 @@ class LraTrainConfig:
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
 
+    max_eval_batches: Optional[int] = None
+
     wandb: Optional[Dict[str, Any]] = None
 
     ema_beta: Optional[float] = None

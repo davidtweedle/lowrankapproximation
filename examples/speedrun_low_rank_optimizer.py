@@ -80,6 +80,7 @@ speedrun_config = SpeedrunConfig(
             train_batch_size=512,
             num_train_steps=6000,
             steps_per_eval=2000,
+            learning_rate=3e-4,
             optimizer_config=LowRankOrthogonalConfig(
                 learning_rate=3e-4,
                 weight_decay=0.1,

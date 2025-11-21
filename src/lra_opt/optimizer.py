@@ -144,7 +144,7 @@ def _analyze_tree_and_build_buckets(
                     bias_idx = b_idx
                     bias_shape = b_raw.shape
                     consumed_indices.add(b_idx)
-            reshaped_2d = _reshape_to_2d(raw.shape)
+            reshaped_2d = _reshape_to_2d(raw.shape, bias_shape)
             m, n = reshaped_2d
             extra = 1 if bias_idx is not None else 0
             augmented_shape = (m + extra, n)

@@ -61,6 +61,10 @@ class LraTrainConfig:
     axis_resources: Optional[Dict[str, Any]] = None
     # ---------------------------------------
 
+    @property
+    def trainer(self) -> TrainerConfig:
+        return self.to_trainer_config()
+
     def to_trainer_config(self) -> TrainerConfig:
         """Converts this simple config into a full Levanter TrainerConfig."""
         # Levanter calculates per_device sizes from global, but we provide a fallback

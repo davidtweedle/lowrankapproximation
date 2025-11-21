@@ -21,6 +21,7 @@ class LraTrainConfig:
     per_device_parallelism: int = -1
     per_device_eval_parallelism: int = -1
     steps_per_export: Optional[int] = None
+    steps_per_task_eval: Optional[int] = None
     steps_per_hf_export: Optional[int] = None
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None

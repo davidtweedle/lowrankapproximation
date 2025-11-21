@@ -19,6 +19,7 @@ class LraTrainConfig:
     steps_per_eval: int
     data_seed: int = 0
     steps_per_export: Optional[int] = None
+    steps_per_hf_export: Optional[int] = None
     optimizer_config: Optional[OptimizerConfig] = None
     # --- ADDED FEATURE: Sharding Control ---
     # Allows forcing Data Parallelism by setting model axes to None

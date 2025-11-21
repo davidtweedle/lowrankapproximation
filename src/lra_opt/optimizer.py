@@ -59,13 +59,12 @@ def _is_shape_info(x):
     return isinstance(x, AugmentedShapeInfo)
 
 def _is_weight_block(x):
+    if hasattr(x, 'weight') and x.weight is not None:
+        return True
+
     if isinstance(x, collections.abc.Mapping):
-        has_target = any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head', 'weights'))
-#        if not has_target and 'bias' in x:
-#            logging.info(f"DEBUG: Found dict with 'bias' but no kernel. Keys: {list(x.keys())}")
-#        if has_target:
-#            logging.info(f"DEBUG: Found weight block with keys: {list(x.keys())}")
-        return has_target
+        return any(k in x for k in ('kernel', 'embedding', 'embedding_table', 'lm_head', 'weights'))
+
     return False
 
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
@@ -104,27 +103,45 @@ def _compute_shape_info(params):
 
     def classify_subtree(subtree):
         if _is_weight_block(subtree):
-            if 'bias' in subtree:
-                bias = subtree['bias']
+            if isinstance(subtree, collections.abc.Mapping):
+                get_param = lambda key: subtree[key]
+                has_param = lambda key: key in subtree
+                all_keys = subtree.keys()
+            else:
+                get_param = lambda key: getattr(subtree, key)
+                has_param = lambda key: hasattr(subtree, key) and getattr(subtree, key) is not None
+                all_keys = dir(subtree)
+            if has_param('weight'):
+                kernel_name = 'weight'
+            elif has_param('kernel'):
+                kernel_name = 'kernel'
+            elif has_param('embedding'):
+                kernel_name = 'embedding'
+            elif has_param('embedding_table'):
+                kernel_name = 'embedding_table'
+            elif has_param('lm_head'):
+                kernel_name = 'lm_head'
+            else:
+                return None
+
+            if has_param('bias'):
+                bias = get_param('bias')
                 bias_name = 'bias'
-                bias_shape = bias.shape
+                if bias is None:
+                    bias_name = None
+                    bias_shape = None
+                else:
+                    bias_shape = bias.shape
             else:
                 bias = None
                 bias_name = None
                 bias_shape = None
-            if 'kernel' in subtree:
-                kernel_name = 'kernel'
-            elif 'embedding' in subtree:
-                kernel_name = 'embedding'
-            elif 'embedding_table' in subtree:
-                kernel_name = 'embedding_table'
-            elif 'lm_head' in subtree:
-                kernel_name = 'lm_head'
-            elif 'weights' in subtree:
-                kernel_name = 'weights'
-            kernel = subtree[kernel_name]
-            kernel_shape = kernel.shape
-            dtype = kernel.dtype
+            try:
+                kernel = get_param(kernel_name)
+                kernel_shape = kernel.shape
+                dtype = kernel.dtype
+            except AttributeError:
+                return None
 
             reshaped_2d = _reshape_to_2d(kernel_shape, bias_shape)
             m, n = reshaped_2d
@@ -325,17 +342,23 @@ def _tree_to_bucketed_tensors(
     for leaf, loc in zip(leaves, leaf_locs):
         if loc is None:
             continue
+
+        if isinstance(leaf, collections.abs.Mapping):
+            get_param = lambda key: leaf[key]
+        else:
+            get_param = lambda key: getattr(leaf, key)
+
         bucket_name, idx, info = loc
         max_m = bucket_structure[bucket_name].max_m
         max_n = bucket_structure[bucket_name].max_n
 
         padded_matrix = jnp.zeros((max_m, max_n), dtype=info.dtype)
         m, n = info.reshaped_2d
-        kernel = leaf[info.kernel_name].reshape(m, n)
+        kernel = get_param(info.kernel_name).reshape(m, n)
         padded_matrix = padded_matrix.at[:m, :n].set(kernel)
 
         if info.bias_name is not None:
-            bias_flat = leaf[info.bias_name].reshape(-1)
+            bias_flat = get_param(info.bias_name).reshape(-1)
             padded_matrix = padded_matrix.at[m, :bias_flat.shape[0]].set(bias_flat)
         bucket_lists[bucket_name][idx] = padded_matrix
     batched_tensors = {

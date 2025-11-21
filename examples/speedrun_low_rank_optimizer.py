@@ -15,7 +15,7 @@ from experiments.llama import llama_75m
 from lra_opt.optimizer import low_rank_orthogonal_update, create_param_labels
 
 
-@dataclass
+@dataclass(frozen=True)
 class LowRankOrthogonalConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.99
@@ -83,6 +83,7 @@ speedrun_config = SpeedrunConfig(
             optimizer_config=LowRankOrthogonalConfig(
                 learning_rate=3e-4,
                 weight_decay=0.1,
+                lr_schedule='cosine',
                 warmup=500,
                 min_lr_ratio=0.1,
                 ),

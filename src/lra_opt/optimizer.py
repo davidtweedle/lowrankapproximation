@@ -67,6 +67,11 @@ def _is_weight_block(x):
 
     return False
 
+def _get_raw_array(tensor):
+    if hasattr(tensor, "array") and hasattr(tensor, "axes"):
+        return tensor.array
+    return tensor
+
 def _reshape_to_2d(weight_shape, bias_shape) -> Tuple[int, int]:
     """
     Calculate shape of weight as a matrix
@@ -125,21 +130,23 @@ def _compute_shape_info(params):
                 return None
 
             if has_param('bias'):
-                bias = get_param('bias')
-                bias_name = 'bias'
-                if bias is None:
+                bias_wrapper = get_param('bias')
+                if bias_wrapper is None:
                     bias_name = None
                     bias_shape = None
                 else:
-                    bias_shape = bias.shape
+                    bias_name = 'bias'
+                    bias_raw = _get_raw_array(bias_wrapper)
+                    bias_shape = bias_raw.shape
             else:
                 bias = None
                 bias_name = None
                 bias_shape = None
             try:
-                kernel = get_param(kernel_name)
-                kernel_shape = kernel.shape
-                dtype = kernel.dtype
+                kernel_wrapper = get_param(kernel_name)
+                kernel_raw = _get_raw_array(kernel_wrapper)
+                kernel_shape = kernel_raw.shape
+                dtype = kernel_raw.dtype
             except AttributeError:
                 return None
 
@@ -354,11 +361,15 @@ def _tree_to_bucketed_tensors(
 
         padded_matrix = jnp.zeros((max_m, max_n), dtype=info.dtype)
         m, n = info.reshaped_2d
-        kernel = get_param(info.kernel_name).reshape(m, n)
+        kernel_wrapper = get_param(info.kernel_name)
+        kernel_raw = _get_raw_array(kernel_wrapper)
+        kernel = kernel_raw.reshape(m, n)
         padded_matrix = padded_matrix.at[:m, :n].set(kernel)
 
         if info.bias_name is not None:
-            bias_flat = get_param(info.bias_name).reshape(-1)
+            bias_wrapper = get_param(info.bias_name)
+            bias_raw = _get_raw_array(bias_wrapper)
+            bias_flat = bias_raw.reshape(-1)
             padded_matrix = padded_matrix.at[m, :bias_flat.shape[0]].set(bias_flat)
         bucket_lists[bucket_name][idx] = padded_matrix
     batched_tensors = {

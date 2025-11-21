@@ -17,9 +17,8 @@ class LraTrainConfig:
     learning_rate: float
     weight_decay: float
     steps_per_eval: int
-    
+    data_seed: int = 0
     optimizer_config: Optional[OptimizerConfig] = None
-    
     # --- ADDED FEATURE: Sharding Control ---
     # Allows forcing Data Parallelism by setting model axes to None
     axis_resources: Optional[Dict[str, Any]] = None
@@ -27,10 +26,8 @@ class LraTrainConfig:
 
     def to_trainer_config(self) -> TrainerConfig:
         """Converts this simple config into a full Levanter TrainerConfig."""
-        
         # Levanter calculates per_device sizes from global, but we provide a fallback
         # Note: We rely on Levanter's internal defaults for most things.
-        
         return TrainerConfig(
             num_train_steps=self.num_train_steps,
             train_batch_size=self.train_batch_size,

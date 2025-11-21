@@ -1,92 +1,73 @@
-from dataclasses import dataclass, fields
+import dataclasses
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Union, List
 
-from levanter.trainer import TrainerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.optim import OptimizerConfig
-from levanter.tracker.wandb import WandbConfig
+from levanter.schedule import IntSchedule
+
 from marin.resources import GpuConfig, TpuPodConfig
 
-
-@dataclass
-class DummyWatch:
-    is_enabled: bool = False
-
-@dataclass
+@dataclass(frozen=True)
 class LraTrainConfig:
     """
-    A Custom Training Config for LRA that supports axis_resources (Sharding Control).
-    Based on Marin's SimpleTrainConfig.
+    A Custom Training Config for LRA.
+    Matches Marin's SimpleTrainConfig structure but adds axis_resources.
     """
     resources: Union[GpuConfig, TpuPodConfig]
-    train_batch_size: int
+    
+    train_batch_size: Union[int, IntSchedule]
     num_train_steps: int
     learning_rate: float
-    weight_decay: float
-    steps_per_eval: int
-    data_seed: int = 0
-    per_device_parallelism: int = -1
-    per_device_eval_parallelism: int = -1
-    steps_per_export: Optional[int] = None
+    
+    # --- Optional Fields matching SimpleTrainConfig ---
+    data_seed: Optional[int] = None
+    weight_decay: Optional[float] = None
+    beta1: Optional[float] = None
+    beta2: Optional[float] = None
+    epsilon: Optional[float] = None
+    max_grad_norm: Optional[float] = None
+    
+    warmup: Optional[float] = None
+    decay: Optional[float] = None
+    rewarmup: Optional[float] = None
+    lr_schedule: Optional[str] = None
+    min_lr_ratio: Optional[float] = None
+    cycle_length: Union[int, List[int], None] = None
+    
+    z_loss_weight: Optional[float] = None
+    ema_beta: Optional[float] = None
+    skip_bad_steps: bool = False
+
+    # Evaluation & Export
+    steps_per_eval: Optional[int] = None
+    steps_per_export: int = 10000
     steps_per_task_eval: Optional[int] = None
     steps_per_hf_export: Optional[int] = None
-    hf_save_path: Optional[str] = None
-    hf_upload: Optional[str] = None
-
+    
+    per_device_eval_parallelism: Optional[int] = None
     max_eval_batches: Optional[int] = None
 
-    int8: bool = False
-
-    wandb: Optional[Dict[str, Any]] = None
-    watch: Optional[List[str]] = None
-    profiler: Optional[str] = None
-    profiler_start_step: int = -1
-    profiler_num_steps: int = -1
-
-    z_loss_weight: float = 0.0
-    loss_scale: Optional[float] = None
-
-    ema_beta: Optional[float] = None
-
-    reset_data_loader_on_init: bool = True
-
-    load_checkpoint_path: Optional[str] = None
-    allow_partial_checkpoint: Optional[str] = None
-    initialize_from_hf: Optional[str] = None
+    # Checkpointing
     initialize_from_checkpoint_path: Optional[str] = None
+    initialize_from_hf: Optional[str] = None
+    reset_data_loader_on_init: bool = True
+    allow_partial_checkpoint: bool = False
 
-    per_device_eval_parallelism: Optional[bool] = None
+    # Advanced
+    int8: bool = False
+    
     optimizer_config: Optional[OptimizerConfig] = None
-    # --- ADDED FEATURE: Sharding Control ---
-    # Allows forcing Data Parallelism by setting model axes to None
+
+    # FIX: Use default_factory to ensure a valid WatchConfig object exists
+    watch: WatchConfig = field(default_factory=WatchConfig)
+
+    # Profiler
+    profiler: bool = False
+    profiler_start_step: int = 5
+    profiler_num_steps: int = 100
+    
+    # --- CUSTOM FIELD FOR LRA ---
+    # Marin's default_train might ignore this if it doesn't explicitly look for it,
+    # but having it here prevents AttributeErrors if you patch defaults.py.
     axis_resources: Optional[Dict[str, Any]] = None
-    # ---------------------------------------
-
-    @property
-    def trainer(self) -> TrainerConfig:
-        return self.to_trainer_config()
-
-    def to_trainer_config(self) -> TrainerConfig:
-        """Converts this simple config into a full Levanter TrainerConfig."""
-        # Levanter calculates per_device sizes from global, but we provide a fallback
-        # Note: We rely on Levanter's internal defaults for most things.
-        wandb_config = None
-        if self.wandb is not None:
-            wandb_config = WandbConfig(**self.wandb)
-        watch_config = DummyWatch()
-        return TrainerConfig(
-            num_train_steps=self.num_train_steps,
-            train_batch_size=self.train_batch_size,
-            # Pass the optimizer config (which contains the scheduler logic)
-            optimizer=self.optimizer_config,
-            # Evaluation settings
-            steps_per_eval=self.steps_per_eval,
-            steps_per_save=self.steps_per_export,
-            per_device_parallelism=self.per_device_parallelism,
-            per_device_eval_parallelism=self.per_device_eval_parallelism,
-            ema_decay=self.ema_beta,
-            load_checkpoint_path=self.load_checkpoint_path,
-            wandb=wandb_config,
-            watch=watch_config,
-            # --- PASS THE SHARDING CONFIG ---
-            axis_resources=self.axis_resources,
-        )

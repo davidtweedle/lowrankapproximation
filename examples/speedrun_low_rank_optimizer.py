@@ -4,7 +4,6 @@ import jax
 import optax
 
 from levanter.optim import OptimizerConfig
-from experiments.simple_train_config import SimpleTrainConfig
 
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
@@ -12,7 +11,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 from experiments.llama import llama_75m
 
-from lra_opt.optimizer import low_rank_orthogonal_update, create_param_labels
+from lra_opt import low_rank_orthogonal_update, create_param_labels, LraTrainConfig
 
 
 @dataclass(frozen=True)
@@ -72,7 +71,7 @@ speedrun_config = SpeedrunConfig(
             ),
         description="75M parameter model with Low-rank orthogonal optimizer",
         model_config=llama_75m,
-        train_config=SimpleTrainConfig(
+        train_config=LraTrainConfig(
             GpuConfig(
                 gpu_count=4,
                 accelerator_type="A100",

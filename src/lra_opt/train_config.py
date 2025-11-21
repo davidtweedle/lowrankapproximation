@@ -30,6 +30,7 @@ class LraTrainConfig:
     ema_beta: Optional[float] = None
 
     load_checkpoint_path: Optional[str] = None
+    initialize_from_hf: Optional[str] = None
     initialize_from_checkpoint_path: Optional[str] = None
 
     per_device_eval_parallelism: Optional[bool] = None

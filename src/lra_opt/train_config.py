@@ -33,6 +33,8 @@ class LraTrainConfig:
 
     ema_beta: Optional[float] = None
 
+    reset_data_loader_on_init: bool = True
+
     load_checkpoint_path: Optional[str] = None
     allow_partial_checkpoint: Optional[str] = None
     initialize_from_hf: Optional[str] = None

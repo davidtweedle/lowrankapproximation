@@ -263,7 +263,7 @@ def _merge_buckets(initial_bucket_map):
                 area_B, bucket_B = ActiveBuckets[j]
                 M_new = max(bucket_A.max_m, bucket_B.max_m)
                 N_new = max(bucket_A.max_n, bucket_B.max_n)
-                new_total_area = (M_new * N_new) * (len(bucket_A.layer_paths) + len(bucket_B.layer_paths))
+                new_total_area = (M_new * N_new) * (len(bucket_A.groups) + len(bucket_B.groups))
                 total_useful_area = area_A + area_B
                 padding_cost = (new_total_area - total_useful_area) / new_total_area
                 if padding_cost < best_cost:

@@ -72,7 +72,7 @@ speedrun_config = SpeedrunConfig(
         description="75M parameter model with Low-rank orthogonal optimizer",
         model_config=llama_75m,
         train_config=LraTrainConfig(
-            GpuConfig(
+            resources=GpuConfig(
                 gpu_count=4,
                 accelerator_type="A100",
                 ),

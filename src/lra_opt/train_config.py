@@ -11,7 +11,7 @@ class LraTrainConfig:
     A Custom Training Config for LRA that supports axis_resources (Sharding Control).
     Based on Marin's SimpleTrainConfig.
     """
-    compute_config: Union[GpuConfig, TpuPodConfig]
+    resources: Union[GpuConfig, TpuPodConfig]
     train_batch_size: int
     num_train_steps: int
     learning_rate: float
@@ -34,14 +34,10 @@ class LraTrainConfig:
         return TrainerConfig(
             num_train_steps=self.num_train_steps,
             train_batch_size=self.train_batch_size,
-            
             # Pass the optimizer config (which contains the scheduler logic)
             optimizer=self.optimizer_config,
-            
             # Evaluation settings
             steps_per_eval=self.steps_per_eval,
-            per_device_eval_batch_size=self.train_batch_size, # Rough default
-            
             # --- PASS THE SHARDING CONFIG ---
             axis_resources=self.axis_resources,
         )

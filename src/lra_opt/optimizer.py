@@ -114,24 +114,33 @@ def _analyze_tree_and_build_buckets(
     for path, (idx, raw) in path_to_info.items():
         if idx in consumed_indices:
             continue
-        name = _get_path_name(path[-1])
+        effective_path = path
+        if isinstance(path[-1], jax.tree_util.FlattenedIndexKey):
+            effective_path = path[:-1]
+        name = _get_path_name(effective_path[-1])
         is_weight_name = name in ('kernel', 'weight', 'embedding',
                                   'embedding_table', 'lm_head', 'weights')
         is_float = jnp.issubdtype(raw.dtype, jnp.floating)
         is_matrix = len(raw.shape) >= 2
         if is_weight_name and is_float and is_matrix:
-            prefix = path[:-1]
-            last_node = path[-1]
-            if isinstance(last_node, jax.tree_util.GetAttrKey):
+            prefix = effective_path[:-1]
+            last_key_node = effective_path[-1]
+            if isinstance(last_key_node, jax.tree_util.GetAttrKey):
                 bias_node = jax.tree_util.GetAttrKey('bias')
             else:
                 bias_node = jax.tree_util.DictKey('bias')
-            bias_path = prefix + (bias_node,)
+            bias_path_base = prefix + (bias_node,)
             bias_idx = None
             bias_shape = None
-            if bias_path in path_to_info:
-                b_idx, b_raw = path_to_info[bias_path]
-                if len(b_raw.shape) == 1 and jnp.issubdtype(b_raw.dtype, jnp.floating):
+            if bias_path_base in path_to_info:
+                target_bias_path = bias_path_base
+            elif (bias_path_base + (jax.tree_util.FlattenedIndexKey(0),)) in path_to_info:
+                target_bias_path = bias_path_base + (jax.tree_util.FlattenedIndexKey(0),)
+            else:
+                target_bias_path = None
+            if target_bias_path:
+                b_idx, b_raw = path_to_info[target_bias_path]
+                if jnp.issubdtype(b_raw.dtype, jnp.floating):
                     bias_idx = b_idx
                     bias_shape = b_raw.shape
                     consumed_indices.add(b_idx)

@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any, Union, List
 
 from levanter.trainer import TrainerConfig
 from levanter.optim import OptimizerConfig
-from levanter.tracker.wandb import WandbConfig
+from levanter.tracker.wandb import WandbConfig, WandbWatchConfig
 from marin.resources import GpuConfig, TpuPodConfig
 
 @dataclass
@@ -63,6 +63,7 @@ class LraTrainConfig:
         wandb_config = None
         if self.wandb is not None:
             wandb_config = WandbConfig(**self.wandb)
+        watch_config = WandbWatchConfig()
         return TrainerConfig(
             num_train_steps=self.num_train_steps,
             train_batch_size=self.train_batch_size,
@@ -76,6 +77,7 @@ class LraTrainConfig:
             ema_decay=self.ema_beta,
             load_checkpoint_path=self.load_checkpoint_path,
             wandb=wandb_config,
+            watch=watch_config,
             # --- PASS THE SHARDING CONFIG ---
             axis_resources=self.axis_resources,
         )

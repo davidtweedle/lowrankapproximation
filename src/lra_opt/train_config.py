@@ -7,6 +7,20 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.resources import GpuConfig, TpuPodConfig
 
+
+def _get_default_watch_config():
+    try:
+        for f in fields(TrainerConfig):
+            if f.name == 'watch':
+                return f.type()
+    except Exception as e:
+        print(f"WARNING: Could not reflectively create watch config: {e}")
+
+    @dataclass
+    class DummyWatch:
+        is_enabled: bool = False
+    return DummyWatch()
+
 @dataclass
 class LraTrainConfig:
     """
@@ -64,7 +78,7 @@ class LraTrainConfig:
         wandb_config = None
         if self.wandb is not None:
             wandb_config = WandbConfig(**self.wandb)
-        watch_config = TrainerHooksConfig(watch=self.watch) if self.watch else TrainerHooksConfig()
+        watch_config = _get_default_watch_config()
         return TrainerConfig(
             num_train_steps=self.num_train_steps,
             train_batch_size=self.train_batch_size,

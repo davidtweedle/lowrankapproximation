@@ -18,6 +18,7 @@ class LraTrainConfig:
     weight_decay: float
     steps_per_eval: int
     data_seed: int = 0
+    steps_per_export: Optional[int] = None
     optimizer_config: Optional[OptimizerConfig] = None
     # --- ADDED FEATURE: Sharding Control ---
     # Allows forcing Data Parallelism by setting model axes to None
@@ -35,6 +36,7 @@ class LraTrainConfig:
             optimizer=self.optimizer_config,
             # Evaluation settings
             steps_per_eval=self.steps_per_eval,
+            steps_per_save=self.steps_per_export,
             # --- PASS THE SHARDING CONFIG ---
             axis_resources=self.axis_resources,
         )

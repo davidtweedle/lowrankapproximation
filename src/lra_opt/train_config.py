@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 from levanter.trainer import TrainerConfig
 from levanter.optim import OptimizerConfig
-from marin.resources import ComputeConfig, GpuConfig, TpuPodConfig
+from marin.resources import GpuConfig, TpuPodConfig
 
 @dataclass
 class LraTrainConfig:
@@ -11,7 +11,7 @@ class LraTrainConfig:
     A Custom Training Config for LRA that supports axis_resources (Sharding Control).
     Based on Marin's SimpleTrainConfig.
     """
-    compute_config: ComputeConfig
+    compute_config: Union[GpuConfig, TpuPodConfig]
     train_batch_size: int
     num_train_steps: int
     learning_rate: float

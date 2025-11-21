@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, Union, List
 
 from levanter.trainer import TrainerConfig
-from levanter.trainer_hooks import TrainerHooksConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.resources import GpuConfig, TpuPodConfig

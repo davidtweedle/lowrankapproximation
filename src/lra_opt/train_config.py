@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List
 
 from levanter.trainer import TrainerConfig
 from levanter.optim import OptimizerConfig
@@ -30,6 +30,7 @@ class LraTrainConfig:
     int8: bool = False
 
     wandb: Optional[Dict[str, Any]] = None
+    watch: Optional[List[str]] = None
 
     ema_beta: Optional[float] = None
 

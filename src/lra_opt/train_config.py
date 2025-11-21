@@ -27,6 +27,8 @@ class LraTrainConfig:
 
     max_eval_batches: Optional[int] = None
 
+    int8: bool = False
+
     wandb: Optional[Dict[str, Any]] = None
 
     ema_beta: Optional[float] = None

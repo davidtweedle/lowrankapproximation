@@ -28,6 +28,10 @@ class LraTrainConfig:
     wandb: Optional[Dict[str, Any]] = None
 
     ema_beta: Optional[float] = None
+
+    load_checkpoint_path: Optional[str] = None
+    initialize_from: Optional[str] = None
+
     per_device_eval_parallelism: Optional[bool] = None
     optimizer_config: Optional[OptimizerConfig] = None
     # --- ADDED FEATURE: Sharding Control ---
@@ -49,6 +53,8 @@ class LraTrainConfig:
             steps_per_save=self.steps_per_export,
             per_device_parallelism=self.per_device_parallelism,
             per_device_eval_parallelism=self.per_device_eval_parallelism,
+            ema_decay=self.ema_beta,
+            load_checkpoint_path=self.load_checkpoint_path,
             # --- PASS THE SHARDING CONFIG ---
             axis_resources=self.axis_resources,
         )

@@ -212,12 +212,12 @@ def _analyze_tree_and_build_buckets(
                 leaf_to_bucket[group.bias_leaf_idx] = (b_name, g_idx, 'bias')
 
     logging.info("\n--- Optimizer Bucket Initialization Log ---")
-    total_layers = sum(len(b.layer_paths) for b in merged_buckets.values())
+    total_layers = sum(len(b.groups) for b in merged_buckets.values())
     total_unique_shapes = len(merged_buckets)
     logging.info(f"Total Layers Partitioned: {total_layers}")
     logging.info(f"Total Unique Buckets: {total_unique_shapes}")
     for name, bucket in merged_buckets.items():
-        num_layers = len(bucket.layer_paths)
+        num_layers = len(bucket.groups)
         logging.info(f"\nBucket Name: {name} ({num_layers} layers)")
         logging.info(f" Shape (M x N): {bucket.max_m} x {bucket.max_n}")
         logging.info(f" Dtype: {bucket.dtype}")

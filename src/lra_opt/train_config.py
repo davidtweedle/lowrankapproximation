@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional, Dict, Any, Union, List
 
 from levanter.trainer import TrainerConfig

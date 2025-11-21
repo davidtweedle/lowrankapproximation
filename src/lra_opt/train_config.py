@@ -31,6 +31,7 @@ class LraTrainConfig:
 
     wandb: Optional[Dict[str, Any]] = None
     watch: Optional[List[str]] = None
+    profiler: Optional[str] = None
 
     ema_beta: Optional[float] = None
 

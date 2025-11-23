@@ -109,8 +109,12 @@ def _analyze_tree_and_build_buckets(
         raw = _get_raw_array(leaf)
         if not hasattr(raw, 'shape') or not hasattr(raw, 'dtype'):
             continue
-        name = _get_path_name(path[-1])
-        parent_path = path[:-1]
+        effective_path = path
+        if isinstance(path[-1], jax.tree_util.FlattenedIndexKey):
+            effective_path = path[:-1]
+
+        name = _get_path_name(effective_path[-1])
+        parent_path = effective_path[:-1]
         if name == 'bias':
             biases[parent_path] = (i, raw)
         elif name in ('q_proj', 'k_proj', 'v_proj', 'query', 'key', 'value'):
@@ -131,7 +135,7 @@ def _analyze_tree_and_build_buckets(
             k_path = leaves[k_idx][0]
             k_bias = biases.get(k_path[:-1])
             v_path = leaves[v_idx][0]
-            v_bias = biases.get(b_path[:-1])
+            v_bias = biases.get(v_path[:-1])
 
             bias_indices = []
             if q_bias:
@@ -172,10 +176,7 @@ def _analyze_tree_and_build_buckets(
     for path, (idx, raw) in sorted(other_leaves.items()):
         if idx in consumed_indices:
             continue
-        effective_path = path
-        if isinstance(path[-1], jax.tree_util.FlattenedIndexKey):
-            effective_path = path[:-1]
-        name = _get_path_name(effective_path[-1])
+        name = _get_path_name(path[-1])
         is_weight_name = name in ('kernel', 'weight', 'embedding',
                                   'embedding_table', 'lm_head', 'weights')
         is_float = jnp.issubdtype(raw.dtype, jnp.floating)
@@ -380,9 +381,11 @@ def _leaves_to_bucketed_tensors(
             axis = group.concat_axis
 
             if isinstance(group.weight_leaf_idx, list):
-                parts = [_get_raw_array(leaves[idx]).reshape(*group.reshaped_2d)
-                         for idx in group.weight_leaf_idx]
                 fusion_axis = 1 if axis == 0 else 0
+                f_m, f_n = group.reshaped_2d
+                single_shape = (f_m, f_n // 3) if fusion_axis == 1 else (f_m // 3, f_n)
+                parts = [_get_raw_array(leaves[idx]).reshape(single_shape)
+                         for idx in group.weight_leaf_idx]
                 weight_mat = jnp.concatenate(parts, axis=fusion_axis)
             else:
                 raw = _get_raw_array(leaves[group.weight_leaf_idx])

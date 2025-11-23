@@ -305,10 +305,8 @@ def _analyze_tree_and_build_buckets(
 
 def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
     if factor_type == 'qr_with_pivot':
-        d = math.ceil(10 * math.log2(max(2, int(n))))
+        d = math.ceil(math.sqrt(max(2, int(n))))
         d = max(24, d)
-        k = min(n, math.ceil(math.sqrt(int(n))))
-        d = min(k, d)
         return int(d)
     rmax = min(int(m), int(n))
     if rank_type == 'sqrt':

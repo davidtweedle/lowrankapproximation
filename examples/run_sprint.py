@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import dataclasses
 from typing import Any, Optional
 
-from levanter.optim import OptimizerConfig, register_optimizer
+from levanter.optim import OptimizerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.trainer import TrainerConfig
 

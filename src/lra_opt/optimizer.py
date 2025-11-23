@@ -278,7 +278,7 @@ def _analyze_tree_and_build_buckets(
     leaf_to_bucket = {}
     for b_name, bucket in merged_buckets.items():
         for g_idx, group in enumerate(bucket.groups):
-            w_idx = group.weight_leaf_idx if isinstance(group.weight_leaf_idx, list) else [group.weight_leaf_idx]
+            w_idxs = group.weight_leaf_idx if isinstance(group.weight_leaf_idx, list) else [group.weight_leaf_idx]
             for w in w_idxs:
                 leaf_to_bucket[w] = (b_name, g_idx, 'weight')
             if group.bias_leaf_idx is not None:
@@ -509,6 +509,7 @@ def low_rank_orthogonal_update(
         rank_val,
         embedding_strategy='adam',
         lm_head_strategy='adam',
+        adam_lr=None,
         eps=1e-8,
         eps_root=0.0,
         weight_decay=0.0,
@@ -521,6 +522,7 @@ def low_rank_orthogonal_update(
         The corresponding `GradientTransformation`.
     """
     param_label_fn = create_param_labels(embedding_strategy, lm_head_strategy)
+    adam_learning_rate = adam_lr if adam_lr is not None else lr
     return optax.partition(
             transforms={
                 'low_rank_orthogonal_update': optax.chain(
@@ -538,7 +540,7 @@ def low_rank_orthogonal_update(
                     optax.scale_by_learning_rate(lr)
                     ),
                 'adam': optax.nadamw(
-                    learning_rate=lr,
+                    learning_rate=adam_learning_rate,
                     b1=beta1,
                     b2=beta2,
                     eps=eps,

@@ -34,7 +34,7 @@ from experiments.llama import llama_125m
 
 from lra_opt import low_rank_orthogonal_update, create_param_labels, LraTrainConfig
 
-@register_optimizer("low_rank_orthogonal")
+@OptimizerConfig.register_subclass("low_rank_orthogonal")
 @dataclass(frozen=True)
 class LowRankOrthogonalConfig(OptimizerConfig):
     """

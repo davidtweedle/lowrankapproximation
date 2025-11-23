@@ -98,6 +98,8 @@ def _analyze_tree_and_build_buckets(
         params,
         rank_type,
         rank_val,
+        embedding_strategy='adam',
+        lm_head_strategy='adam',
         ) -> Tuple[Dict[str, LayerBucket], Dict[int, Tuple[str, int, str]]]:
     leaves, treedef = jax.tree.flatten_with_path(params)
     attention_groups = collections.defaultdict(dict)
@@ -215,11 +217,17 @@ def _analyze_tree_and_build_buckets(
             if name in {'embedding', 'embedding_table'} or (
                     len(raw.shape) == 2 and raw.shape[0] > 20000
                     ):
-                factor_type = 'qr_with_pivot'
+                if embedding_strategy == 'pivoted_qr':
+                    factor_type = 'qr_with_pivot'
+                else:
+                    continue
             elif name == 'lm_head' or (
                     len(raw.shape) == 2 and raw.shape[1] > 20000
                     ):
-                factor_type = 'qr_with_pivot_transpose'
+                if lm_head_strategy == 'pivoted_qr':
+                    factor_type = 'qr_with_pivot_transpose'
+                else:
+                    continue
             else:
                 factor_type = 'tall' if aug_m >= aug_n else 'wide'
 
@@ -465,9 +473,9 @@ def _bucketed_tensors_to_tree(
     return jax.tree.unflatten(treedef, new_leaves)
 
 
-def create_param_labels() -> Callable:
+def create_param_labels(embedding_strategy, lm_head_strategy) -> Callable:
     def label_fn(params):
-        _, leaf_map = _analyze_tree_and_build_buckets(params, 'sqrt', None)
+        _, leaf_map = _analyze_tree_and_build_buckets(params, 'sqrt', None, embedding_strategy, lm_head_strategy)
         leaves, treedef = jax.tree.flatten_with_path(params)
         labels = []
         for i, _ in enumerate(leaves):
@@ -499,7 +507,8 @@ def low_rank_orthogonal_update(
         krylov_iter,
         rank_type,
         rank_val,
-        param_label_fn=None,
+        embedding_strategy='adam',
+        lm_head_strategy='adam',
         eps=1e-8,
         eps_root=0.0,
         weight_decay=0.0,
@@ -511,8 +520,7 @@ def low_rank_orthogonal_update(
     Returns:
         The corresponding `GradientTransformation`.
     """
-    if param_label_fn is None:
-        param_label_fn = create_param_labels()
+    param_label_fn = create_param_labels(embedding_strategy, lm_head_strategy)
     return optax.partition(
             transforms={
                 'low_rank_orthogonal_update': optax.chain(
@@ -522,6 +530,8 @@ def low_rank_orthogonal_update(
                         krylov_iter=krylov_iter,
                         rank_type=rank_type,
                         rank_val=rank_val,
+                        embedding_strategy=embedding_strategy,
+                        lm_head_strategy=lm_head_strategy,
                         eps=eps
                         ),
                     optax.add_decayed_weights(weight_decay, mask),
@@ -547,6 +557,8 @@ def scale_by_low_rank_orthogonal_update(
       krylov_iter: int = 2,
       rank_type: str = 'sqrt',
       rank_val: Optional[int] = None,
+      embedding_strategy: str = 'adam',
+      lm_head_strategy: str = 'adam',
       eps=1e-8,
       ):
     """
@@ -574,7 +586,9 @@ def scale_by_low_rank_orthogonal_update(
         bucket_structure, leaf_map = _analyze_tree_and_build_buckets(
                 params,
                 rank_type,
-                rank_val
+                rank_val,
+                embedding_strategy,
+                lm_head_strategy,
                 )
         _, treedef = jax.tree.flatten(params)
         batched_momentum = {
@@ -622,7 +636,7 @@ def scale_by_low_rank_orthogonal_update(
             update = batched_updates[name]
             momentum = batched_momentum[name]
             rank = bucket.rank
-            factor_type = bucket.factor_type
+            factor_type = bucket.factor_type.replace('_fused', '')
             updated_momentum = (1 - beta1) * update + beta1 * momentum
             batched_updated_momentum[name] = updated_momentum
             batched_updates[name] = linalg.compute_batched_update(

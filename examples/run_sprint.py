@@ -25,7 +25,7 @@ def _new_init(self, *args, **kwargs):
 TrainerConfig.__init__ = _new_init
 
 from marin.execution.executor import executor_main
-from marin.speedrun import speedrun, SpeedrunConfig, Author
+from marin.speedrun.speedrun import speedrun, SpeedrunConfig, Author
 from marin.resources import GpuConfig
 
 

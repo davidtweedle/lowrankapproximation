@@ -30,7 +30,7 @@ from marin.resources import GpuConfig
 
 
 # Use 125M config for the sprint (Standard benchmark size)
-from experiments.llama import llama_125m 
+from experiments.llama import llama_130m 
 
 from lra_opt import low_rank_orthogonal_update, create_param_labels, LraTrainConfig
 

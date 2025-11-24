@@ -187,4 +187,6 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python examples/speedrun_low_rank_optimizer.py [A|B|C|D]")
         sys.exit(1)
-    run_variant(sys.argv[1])
+    variant_id = sys.argv[1]
+    del sys.argv[1]
+    run_variant(variant_id)

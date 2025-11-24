@@ -163,7 +163,7 @@ def run_variant(variant_id):
     # Build Training Config
     train_config = LraTrainConfig(
         resources=GpuConfig(gpu_count=4, accelerator_type="A100"),
-        train_batch_size=256,
+        train_batch_size=128,
         num_train_steps=2000, 
         
         # --- FIX: Add Missing Fields ---

@@ -261,19 +261,18 @@ def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
         k = min(m, n)
         d = math.ceil(math.sqrt(max(2, int(k))))
         d = max(24, d)
+        d = min(k, d)
         return int(d)
     rmax = min(int(m), int(n))
     if rank_type == 'sqrt':
         r = int(math.sqrt(rmax))
     elif rank_type == 'constant':
-        if rank_val is None:
-            raise ValueError("rank_val must be set for rank_type='constant'")
-        r = int(min(rank_val, rmax))
+        r = int(min(rank_val, rmax)) if rank_val else int(math.sqrt(rmax))
     else:
-        raise ValueError(f"Unknown rank_type: {rank_type}")
+        r = int(math.sqrt(rmax))
     r = max(1, r)
     r_po2 = 1 << (r - 1).bit_length()
-    return r_po2
+    return min(r_po2, rmax)
 
 
 def _merge_buckets(initial_bucket_map):

@@ -352,7 +352,7 @@ def _leaves_to_bucketed_tensors(
         bucket_structure: Dict[str, LayerBucket],
         ) -> Dict[str, jnp.ndarray]:
     bucket_lists = {
-            name: jnp.zeros((b.total_caplacity, b.max_m, b.max_n), dtype=b.dtype)
+            name: jnp.zeros((b.total_capacity, b.max_m, b.max_n), dtype=b.dtype)
             for name, b in bucket_structure.items()
             }
     for leaf_idx, (b_name, g_idx, start_idx, kind) in leaf_map.items():

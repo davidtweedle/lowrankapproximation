@@ -257,7 +257,7 @@ def _analyze_tree_and_build_buckets(
 
 
 def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
-    if factor_type.starts_with('qr_with_pivot'):
+    if factor_type.startswith('qr_with_pivot'):
         k = min(m, n)
         d = math.ceil(math.sqrt(max(2, int(k))))
         d = max(24, d)

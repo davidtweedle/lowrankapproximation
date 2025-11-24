@@ -30,7 +30,7 @@ from marin.resources import GpuConfig
 
 
 # Use 125M config for the sprint (Standard benchmark size)
-from experiments.llama import llama_130m 
+from experiments.llama import llama_150m 
 
 from lra_opt import low_rank_orthogonal_update, create_param_labels, LraTrainConfig
 
@@ -179,7 +179,7 @@ def run_variant(variant_id):
     speedrun_conf = SpeedrunConfig(
         author=Author(name="David Tweedle", affiliation="Indep", url="https://github.com/davidtweedle"),
         description=desc,
-        model_config=llama_125m,
+        model_config=llama_150m,
         train_config=train_config
     )
 

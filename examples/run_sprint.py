@@ -101,7 +101,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
             else:
                 return base_opt
                 
-        return optax.inject_hyperparams(_optimizer)(learning_rate=lr_schedule)
+        return optax.inject_hyperparams(optimizer_factory)(learning_rate=lr_schedule)
 
 def run_variant(variant_id):
     print(f"--- LAUNCHING SPRINT: VARIANT {variant_id} ---")

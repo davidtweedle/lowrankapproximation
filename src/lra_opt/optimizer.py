@@ -175,7 +175,7 @@ def _analyze_tree_and_build_buckets(
             for idx, raw in members.values():
                 other_leaves[idx] = (leaves[idx][0], raw)
 
-    for path, (idx, raw) in sorted(other_leaves.items()):
+    for idx, (path, raw) in sorted(other_leaves.items()):
         if idx in consumed_indices:
             continue
         name = _get_path_name(path[-1])

@@ -31,12 +31,10 @@ import optax
 from absl import logging
 from flax import struct
 
-
 from . import linalg
 
-
 def _get_raw_array(tensor):
-    if hasattr(tensor, "array") and hasattr(tensor, "axes"):
+    while hasattr(tensor, "array"):
         return tensor.array
     return tensor
 
@@ -44,23 +42,42 @@ def _get_reshape_info(shape: Tuple[int, ...], bias_size: Optional[int] = None) -
     total = math.prod(shape)
     if len(shape) < 2:
         return (total, 1,), 1
+    best_split = -1
 
     if bias_size is not None:
-        if shape[0] == bias_size:
-            return (shape[0], total // shape[0]), 1
-        elif shape[-1] == bias_size:
-            return (total // shape[-1], shape[-1]), 0
-        return (total // shape[-1], shape[-1]), 0
-    m1, n1 = shape[0], total // shape[0]
-    ratio1 = max(m1, n1) / min(m1, n1)
-
-    m2, n2 = shape[-1], total // shape[-1]
-    ratio2 = max(m2, n2) / min(m2, n2)
-
-    if ratio1 < ratio2:
-        return (m1, n1), 1
-    else:
-        return (m2, n2), 0
+        current_prod = 1
+        for i in range(len(shape) - 1, -1, -1):
+            current_prod *= shape[i]
+            reverse = False
+            if current_prod == bias_size:
+                best_split = i
+                break
+            elif current_prod == total // bias_size:
+                best_split = i
+                reverse = True
+                break
+        if best_split != -1:
+            if not reverse:
+                n = bias_size
+                m = total // n
+                return (m, n), 0
+            else:
+                m = bias_size
+                n = total // m
+                return (m, n), 1
+        # else raise error here
+    best_ratio = float('inf')
+    best_m, best_n = shape[0], total // shape[0]
+    current_m = 1
+    for i in range(len(shape) - 1):
+        current_m *= shape[i]
+        current_n = total // current_m
+        ratio = max(current_m, current_n) / min(current_m, current_n)
+        if ratio < best_ratio:
+            best_ratio = ratio
+            best_m = current_m
+            best_n = current_n
+    return (best_m, best_n), 0
 
 
 @struct.dataclass
@@ -74,6 +91,7 @@ class ParameterGroup:
     reshaped_2d: Tuple[int, int] = struct.field(pytree_node=False)
     augmented_shape: Tuple[int, int] = struct.field(pytree_node=False)
     concat_axis: int = struct.field(pytree_node=False)
+
     factor_type: str = struct.field(pytree_node=False)
     dtype: Any = struct.field(pytree_node=False)
 
@@ -102,135 +120,72 @@ def _analyze_tree_and_build_buckets(
         lm_head_strategy='adam',
         ) -> Tuple[Dict[str, LayerBucket], Dict[int, Tuple[str, int, str]]]:
     leaves, treedef = jax.tree.flatten_with_path(params)
-    attention_groups = collections.defaultdict(dict)
-    other_leaves = {}
-    biases = {}
+    path_to_info = {}
     for i, (path, leaf) in enumerate(leaves):
         if isinstance(leaf, optax.MaskedNode):
             continue
         raw = _get_raw_array(leaf)
         if not hasattr(raw, 'shape') or not hasattr(raw, 'dtype'):
             continue
+        path_to_info[path] = (i, raw)
+    groups: List[ParameterGroup] = []
+    consumed_indices = set()
+
+    for path, (idx, raw) in path_to_info.items():
+        if idx in consumed_indices:
+            continue
         effective_path = path
         if isinstance(path[-1], jax.tree_util.FlattenedIndexKey):
             effective_path = path[:-1]
-
         name = _get_path_name(effective_path[-1])
-        parent_path = effective_path[:-1]
-        if name == 'bias':
-            biases[parent_path] = (i, raw)
-        elif name in ('q_proj', 'k_proj', 'v_proj', 'query', 'key', 'value'):
-            attention_groups[parent_path][name[0]] = (i, raw)
-        elif len(raw.shape) >= 2:
-            other_leaves[i] = (path, raw)
-
-    groups: List[ParameterGroup] = []
-    consumed_indices = set()
-    for parent, members in attention_groups.items():
-        if 'q' in members and 'k' in members and 'v' in members:
-            q_idx, q_raw = members['q']
-            k_idx, k_raw = members['k']
-            v_idx, v_raw = members['v']
-
-            q_path = leaves[q_idx][0]
-            q_bias = biases.get(q_path[:-1])
-            k_path = leaves[k_idx][0]
-            k_bias = biases.get(k_path[:-1])
-            v_path = leaves[v_idx][0]
-            v_bias = biases.get(v_path[:-1])
-
-            bias_indices = []
-            if q_bias:
-                bias_indices.append(q_bias[0])
-                consumed_indices.add(q_bias[0])
-            if k_bias:
-                bias_indices.append(k_bias[0])
-                consumed_indices.add(k_bias[0])
-            if v_bias:
-                bias_indices.append(v_bias[0])
-                consumed_indices.add(v_bias[0])
-            
-            bias_size = q_bias[1].shape[0] if q_bias else None
-            (base_m, base_n), concat_axis = _get_reshape_info(q_raw.shape, bias_size)
-            if concat_axis == 0:
-                fused_m, fused_n = base_m, base_n * 3
-                aug_m, aug_n = fused_m + (1 if bias_indices else 0), fused_n
-            else:
-                fused_m, fused_n = base_m * 3, base_n
-                aug_m, aug_n = fused_m, fused_n + (1 if bias_indices else 0)
-            factor_type = 'tall' if aug_m >= aug_n else 'wide'
-            groups.append(ParameterGroup(
-                weight_leaf_idx=[q_idx, k_idx, v_idx],
-                bias_leaf_idx=bias_indices if bias_indices else None,
-                weight_shape=q_raw.shape,
-                bias_shape=q_bias[1].shape if q_bias else None,
-                reshaped_2d=(fused_m, fused_n),
-                augmented_shape=(aug_m, aug_n),
-                concat_axis=concat_axis,
-                factor_type=f"{factor_type}_fused",
-                dtype=q_raw.dtype,
-                ))
-            consumed_indices.update([q_idx, k_idx, v_idx])
-        else:
-            for idx, raw in members.values():
-                other_leaves[idx] = (leaves[idx][0], raw)
-
-    for idx, (path, raw) in sorted(other_leaves.items()):
-        if idx in consumed_indices:
-            continue
-        name = _get_path_name(path[-1])
         is_weight_name = name in ('kernel', 'weight', 'embedding',
-                                  'embedding_table', 'lm_head', 'weights')
+                                  'embedding_table', 'lm_head',
+                                  'weights')
         is_float = jnp.issubdtype(raw.dtype, jnp.floating)
         is_matrix = len(raw.shape) >= 2
         if is_weight_name and is_float and is_matrix:
             prefix = effective_path[:-1]
-            last_key_node = effective_path[-1]
-            if isinstance(last_key_node, jax.tree_util.GetAttrKey):
+            last_node = effective_path[-1]
+            if isinstance(last_node, jax.tree_util.GetAttrKey):
                 bias_node = jax.tree_util.GetAttrKey('bias')
             else:
                 bias_node = jax.tree_util.DictKey('bias')
             bias_path_base = prefix + (bias_node,)
-            bias_idx = None
-            bias_shape = None
+            target_bias_path = None
             if bias_path_base in path_to_info:
                 target_bias_path = bias_path_base
             elif (bias_path_base + (jax.tree_util.FlattenedIndexKey(0),)) in path_to_info:
                 target_bias_path = bias_path_base + (jax.tree_util.FlattenedIndexKey(0),)
-            else:
-                target_bias_path = None
+            bias_idx = None
+            bias_shape = None
+            bias_size = None
             if target_bias_path:
                 b_idx, b_raw = path_to_info[target_bias_path]
                 if jnp.issubdtype(b_raw.dtype, jnp.floating):
                     bias_idx = b_idx
                     bias_shape = b_raw.shape
+                    bias_size = math.prod(bias_shape)
                     consumed_indices.add(b_idx)
-            (m, n), concat_axis = _get_reshape_info(raw.shape, bias_shape)
+            (m, n), concat_axis = _get_reshape_info(raw.shape, bias_size)
             aug_m, aug_n = m, n
             if bias_idx is not None:
                 if concat_axis == 0:
                     aug_m += 1
                 else:
                     aug_n += 1
-            factor_type = None
-
-            if name in {'embedding', 'embedding_table'} or (
-                    len(raw.shape) == 2 and raw.shape[0] > 20000
-                    ):
-                if embedding_strategy == 'pivoted_qr':
-                    factor_type = 'qr_with_pivot'
-                else:
+            factor_type = 'wide'
+            is_large_embed = (len(raw.shape) == 2 and raw.shape[0] > 20000)
+            is_large_head = (len(raw.shape) == 2 and raw.shape[1] > 20000)
+            if name in {'embedding', 'embedding_table'} or is_large_embed:
+                if embedding_strategy == 'adam':
                     continue
-            elif name == 'lm_head' or (
-                    len(raw.shape) == 2 and raw.shape[1] > 20000
-                    ):
-                if lm_head_strategy == 'pivoted_qr':
-                    factor_type = 'qr_with_pivot_transpose'
-                else:
+                factor_type = 'qr_with_pivot'
+            elif name == 'lm_head' or is_large_head:
+                if lm_head_strategy == 'adam':
                     continue
-            else:
-                factor_type = 'tall' if aug_m >= aug_n else 'wide'
-
+                factor_type = 'qr_with_pivot_transpose'
+            elif aug_m >= aug_n:
+                factor_type = 'tall'
             group = ParameterGroup(
                     weight_leaf_idx=idx,
                     bias_leaf_idx=bias_idx,
@@ -240,15 +195,16 @@ def _analyze_tree_and_build_buckets(
                     augmented_shape=(aug_m, aug_n),
                     concat_axis=concat_axis,
                     factor_type=factor_type,
-                    dtype=raw.dtype,
+                    dtype=raw.dtype
                     )
             groups.append(group)
             consumed_indices.add(idx)
+
     buckets_by_key = collections.defaultdict(list)
     special_bucket_map = {}
     for g in groups:
         if 'qr' in g.factor_type:
-            name = f"Special_{g.augmented_shape[0]}x{g.augmented_shape[1]}_{id(g)}"
+            name = f"Special_{g.augmented_shape[0]}x{g.augmented_shape[1]}_{g.weight_leaf_idx}"
             rank = _pick_rank(*g.augmented_shape, g.factor_type, rank_type, rank_val)
             special_bucket_map[name] = LayerBucket(
                     max_m=g.augmented_shape[0],
@@ -278,13 +234,10 @@ def _analyze_tree_and_build_buckets(
     leaf_to_bucket = {}
     for b_name, bucket in merged_buckets.items():
         for g_idx, group in enumerate(bucket.groups):
-            w_idxs = group.weight_leaf_idx if isinstance(group.weight_leaf_idx, list) else [group.weight_leaf_idx]
-            for w in w_idxs:
-                leaf_to_bucket[w] = (b_name, g_idx, 'weight')
+            leaf_to_bucket[group.weight_leaf_idx] = (b_name, g_idx, 'weight')
             if group.bias_leaf_idx is not None:
-                b_idxs = group.bias_leaf_idx if isinstance(group.bias_leaf_idx, list) else [group.bias_leaf_idx]
-                for b in b_idxs:
-                    leaf_to_bucket[b] = (b_name, g_idx, 'bias')
+                leaf_to_bucket[group.bias_leaf_idx] = (b_name, g_idx, 'bias')
+
 
     logging.info("\n--- Optimizer Bucket Initialization Log ---")
     total_layers = sum(len(b.groups) for b in merged_buckets.values())
@@ -304,8 +257,9 @@ def _analyze_tree_and_build_buckets(
 
 
 def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
-    if factor_type == 'qr_with_pivot':
-        d = math.ceil(math.sqrt(max(2, int(n))))
+    if factor_type.starts_with('qr_with_pivot'):
+        k = min(m, n)
+        d = math.ceil(math.sqrt(max(2, int(k))))
         d = max(24, d)
         return int(d)
     rmax = min(int(m), int(n))
@@ -382,38 +336,28 @@ def _leaves_to_bucketed_tensors(
             name: [None] * len(b.groups)
             for name, b in bucket_structure.items()
             }
-    for b_name, bucket in bucket_structure.items():
-        for g_idx, group in enumerate(bucket.groups):
-            axis = group.concat_axis
-
-            if isinstance(group.weight_leaf_idx, list):
-                fusion_axis = 1 if axis == 0 else 0
-                f_m, f_n = group.reshaped_2d
-                single_shape = (f_m, f_n // 3) if fusion_axis == 1 else (f_m // 3, f_n)
-                parts = [_get_raw_array(leaves[idx]).reshape(single_shape)
-                         for idx in group.weight_leaf_idx]
-                weight_mat = jnp.concatenate(parts, axis=fusion_axis)
+    for leaf_idx, (b_name, g_idx, kind) in leaf_map.items():
+        leaf = leaves[leaf_idx]
+        if isinstance(leaf, optax.MaskedNode):
+            continue
+        leaf_raw = _get_raw_array(leaf)
+        bucket = bucket_structure[b_name]
+        group = bucket.groups[g_idx]
+        mat = bucket_lists[b_name][g_idx]
+        if mat is None:
+            mat = jnp.zeros((bucket.max_m, bucket.max_n), dtype=bucket.dtype)
+        m, n = group.reshaped_2d
+        axis = group.concat_axis
+        if kind == 'weight':
+            weight_data = leaf_raw.reshape(m, n)
+            mat = mat.at[:m, :n].set(weight_data)
+        elif kind == 'bias':
+            bias_flat = leaf_raw.reshape(-1)
+            if axis == 0:
+                mat = mat.at[m, :n].set(bias_flat)
             else:
-                raw = _get_raw_array(leaves[group.weight_leaf_idx])
-                weight_mat = raw.reshape(*group.reshaped_2d)
-            if group.bias_leaf_idx is not None:
-                if isinstance(group.bias_leaf_idx, list):
-                    b_parts = [_get_raw_array(leaves[i]).reshape(-1) for i in group.bias_leaf_idx ]
-                    b_vec = jnp.concatenate(b_parts, axis=0)
-                else:
-                    b_vec = _get_raw_array(leaves[group.bias_leaf_idx]).reshape(-1)
-                current_m, current_n = weight_mat.shape
-                if axis == 0:
-                    bias_mat = b_vec.reshape(1, current_n)
-                else:
-                    bias_mat = b_vec.reshape(current_m, 1)
-                final_mat = jnp.concatenate([weight_mat, bias_mat], axis=axis)
-            else:
-                final_mat = weight_mat
-            mat = bucket_lists[b_name][g_idx]
-            if mat is None:
-                mat = jnp.zeros((bucket.max_m, bucket.max_n), dtype=bucket.dtype)
-                bucket_lists[b_name][g_idx] = mat.at[:final_mat.shape[0], :final_mat.shape[1]].set(final_mat)
+                mat = mat.at[:m, n].set(bias_flat)
+        bucket_lists[b_name][g_idx] = mat
 
     return {
             name: jnp.stack(mats)
@@ -428,46 +372,20 @@ def _bucketed_tensors_to_tree(
         treedef: Any,
         ):
     new_leaves = list(original_leaves)
-    for b_name, bucket in bucket_structure.items():
-        update_batch = batched_updates[b_name]
-        for g_idx, group in enumerate(bucket.groups):
-            update_mat = update_batch[g_idx]
-
-            valid_m, valid_n = group.augmented_shape
-            valid_update = update_mat[:valid_m, :valid_n]
-            axis = group.concat_axis
-
-            if group.bias_leaf_idx is not None:
-                if axis == 0:
-                    weight_update = valid_update[:-1, :]
-                    bias_update = valid_update[-1, :]
-                else:
-                    weight_update = valid_update[:, :-1]
-                    bias_update = valid_update[:, -1]
+    for leaf_idx, (b_name, g_idx, kind) in leaf_map.items():
+        bucket = bucket_structure[b_name]
+        group = bucket.groups[g_idx]
+        update_mat = batched_updates[b_name][g_idx]
+        m, n = group.reshaped_2d
+        axis = group.concat_axis
+        if kind == 'weight':
+            new_leaves[leaf_idx] = update_mat[:m, :n].reshape(group.weight_shape)
+        elif kind == 'bias':
+            if axis == 0:
+                update = update_mat[m, :n]
             else:
-                weight_update = valid_update
-                bias_update = None
-            if isinstance(group.weight_leaf_idx, list):
-                fusion_axis = 1 if axis == 0 else 0
-                dim_len = weight_update.shape[fusion_axis]
-                chunk = dim_len // 3
-                if fusion_axis == 0:
-                    parts = [weight_update[i * chunk : (i + 1) * chunk, :] for i in range(3)]
-                else:
-                    parts = [weight_update[:, i * chunk : (i + 1) * chunk] for i in range(3) ]
-                for i, idx in enumerate(group.weight_leaf_idx):
-                    new_leaves[idx] = parts[i].reshape(*group.weight_shape)
-            else:
-                new_leaves[group.weight_leaf_idx] = weight_update.reshape(*group.weight_shape)
-            if bias_update is not None:
-                if isinstance(group.bias_leaf_idx, list):
-                    total = bias_update.size
-                    chunk = total // 3
-                    b_parts = [bias_update[ i * chunk : (i + 1) * chunk] for i in range(3) ]
-                    for i, idx in enumerate(group.bias_leaf_idx):
-                        new_leaves[idx] = b_parts[i].reshape(group.bias_shape)
-                else:
-                    new_leaves[group.bias_leaf_idx] = bias_update.reshape(group.bias_shape)
+                update = update_mat[:m, n]
+            new_leaves[leaf_idx] = update.reshape(group.bias_shape)
     return jax.tree.unflatten(treedef, new_leaves)
 
 
@@ -630,15 +548,14 @@ def scale_by_low_rank_orthogonal_update(
             new_state_key = new_state_key_obj
         batched_momentum = state.momentum
         bucket_items = list(state.bucket_structure.items())
-        batched_updated_momentum = {}
         for i, (name, bucket) in enumerate(bucket_items):
             use_key = bucket_keys[i]
             update = batched_updates[name]
             momentum = batched_momentum[name]
             rank = bucket.rank
-            factor_type = bucket.factor_type.replace('_fused', '')
+            factor_type = bucket.factor_type
             updated_momentum = (1 - beta1) * update + beta1 * momentum
-            batched_updated_momentum[name] = updated_momentum
+            batched_momentum[name] = updated_momentum
             batched_updates[name] = linalg.compute_batched_update(
                     updated_momentum,
                     use_key,
@@ -656,7 +573,7 @@ def scale_by_low_rank_orthogonal_update(
 
         new_state = ScaleByLowRankOrthogonalUpdateState(
                 step=step_inc,
-                momentum=batched_updated_momentum,
+                momentum=batched_momentum,
                 key=new_state_key,
                 bucket_structure=state.bucket_structure,
                 treedef=state.treedef,

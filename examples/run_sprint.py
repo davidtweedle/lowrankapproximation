@@ -25,7 +25,7 @@ def _new_init(self, *args, **kwargs):
 TrainerConfig.__init__ = _new_init
 
 from marin.execution.executor import executor_main
-from marin.speedrun.speedrun import SpeedrunConfig, Author
+from marin.speedrun.speedrun import SpeedrunConfig, Author, default_speedrun
 from marin.resources import GpuConfig
 
 
@@ -181,7 +181,7 @@ def run_variant(variant_id):
         train_config=train_config
     )
 
-    executor_main(steps=speedrun.default_speedrun(f"sprint_{variant_id}", speedrun_conf))
+    executor_main(steps=default_speedrun(f"sprint_{variant_id}", speedrun_conf))
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:

@@ -8,31 +8,36 @@ from typing import Any, Optional
 
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
+from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import SpeedrunConfig, Author, default_speedrun
 from marin.resources import GpuConfig
 
 # Use 125M config (Ensure this exists in your experiments/llama.py, otherwise use llama_nano)
-try:
-    from experiments.llama import llama_150m
-except ImportError:
-    from experiments.llama import llama_nano as llama_150m
-    print("WARNING: llama_150m not found, falling back to llama_nano")
+from experiments.llama import llama_150m
 
 from lra_opt import low_rank_orthogonal_update, create_param_labels, LraTrainConfig
+_orig_wandb_init = WandbConfig.__init__
+def _new_wandb_init(self, *args, **kwargs):
+    if 'entity' in kwargs:
+        kwargs['entity'] = None
+    _orig_wandb_init(self, *args, **kwargs)
+
+    self.entity = None
+
+WandbConfig.__init__ = _new_wandb_init
 
 # --- Monkey Patch for Axis Resources (Legacy Safety) ---
 _orig_init = TrainerConfig.__init__
 def _new_init(self, *args, **kwargs):
-    if 'axis_resources' not in kwargs or kwargs['axis_resources'] is None:
-        kwargs['axis_resources'] = {
-                'batch': 'data',
-                'vocab': None,
-                'mlp': None,
-                'embed': None,
-                'heads': None,
-                'kv_heads': None,
-                }
+    kwargs['axis_resources'] = {
+            'batch': 'data',
+            'vocab': None,
+            'mlp': None,
+            'embed': None,
+            'heads': None,
+            'kv_heads': None,
+            }
     _orig_init(self, *args, **kwargs)
 TrainerConfig.__init__ = _new_init
 

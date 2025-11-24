@@ -168,13 +168,11 @@ def run_variant(variant_id):
             'heads': None,
             'kv_heads': None,
         },
-        # Enable W&B
-        watch=WatchConfig(
-            group_name="lra_sprint_125m",
-            project_name="lra-optimizer",
-            tags=["sprint", f"variant_{variant_id}", embed_strat]
-        )
     )
+    import os
+    os.environ["WANDB_PROJECT"] = "lra-optimizer"
+    os.environ["WANDB_RUN_GROUP"] = "lra_sprint_150m"
+    os.environ["WANDB_TAGS"] = f"sprint,variant_{variant_id}"
 
     speedrun_conf = SpeedrunConfig(
         author=Author(name="David Tweedle", affiliation="Indep", url="https://github.com/davidtweedle"),

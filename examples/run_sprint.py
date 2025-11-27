@@ -13,22 +13,15 @@ from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import SpeedrunConfig, Author, default_speedrun
 from marin.resources import GpuConfig
 
-# Use 125M config (Ensure this exists in your experiments/llama.py, otherwise use llama_nano)
+# Use 150M config
 from experiments.llama import llama_150m
 
 from lra_opt import low_rank_orthogonal_update, create_param_labels, LraTrainConfig
-_orig_wandb_init = WandbConfig.__init__
-def _new_wandb_init(self, *args, **kwargs):
-    if 'entity' in kwargs:
-        kwargs['entity'] = None
-    _orig_wandb_init(self, *args, **kwargs)
-
-    self.entity = None
-
-WandbConfig.__init__ = _new_wandb_init
 
 # --- Monkey Patch for Axis Resources (Legacy Safety) ---
 _orig_init = TrainerConfig.__init__
+
+
 def _new_init(self, *args, **kwargs):
     kwargs['axis_resources'] = {
             'batch': 'data',
@@ -39,7 +32,10 @@ def _new_init(self, *args, **kwargs):
             'kv_heads': None,
             }
     _orig_init(self, *args, **kwargs)
+
+
 TrainerConfig.__init__ = _new_init
+
 
 @OptimizerConfig.register_subclass("low_rank_orthogonal")
 @dataclass(frozen=True)
@@ -52,27 +48,29 @@ class LowRankOrthogonalConfig(OptimizerConfig):
     beta2: float = 0.99
     epsilon: float = 1e-8
     weight_decay: float = 0.0
-    
+
     max_grad_norm: float | None = 1.0
-    
-    # LRA Specifics
+
+    # lrou Specifics
     krylov_iter: int = 1
-    rank_type: str = "constant" 
-    rank_val: int = 32 
-    
+    rank_type: str = "constant"
+    rank_val: int = 32
+
     # Design Strategy Flags
     embedding_strategy: str = "adam"
     lm_head_strategy: str = "adam"
 
     adam_learning_rate: Optional[float] = None
-    
+
+    adam_weight_decay: float = 0.1
+
     seed: int = 42
 
     def build(self, num_train_steps: int):
         print(f"Building optimizer: {self.__class__.__name__}")
-        
+
         lr_schedule = self.lr_scheduler(num_train_steps)
-        
+
         # Handle separate Adam LR
         if self.adam_learning_rate is not None:
             # Create a temp config just to get the schedule function
@@ -80,8 +78,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
             adam_schedule = adam_conf.lr_scheduler(num_train_steps)
         else:
             adam_schedule = lr_schedule
-        
-        param_label_fn = create_param_labels(self.embedding_strategy, self.lm_head_strategy)
+
         key = jax.random.key(self.seed)
 
         def optimizer_factory(learning_rate):
@@ -93,14 +90,15 @@ class LowRankOrthogonalConfig(OptimizerConfig):
                     krylov_iter=self.krylov_iter,
                     rank_type=self.rank_type,
                     rank_val=self.rank_val,
-                    embedding_strategy=self.embedding_strategy, 
-                    lm_head_strategy=self.lm_head_strategy,     
+                    embedding_strategy=self.embedding_strategy,
+                    lm_head_strategy=self.lm_head_strategy,
                     adam_lr=adam_schedule,
                     eps=self.epsilon,
                     weight_decay=self.weight_decay,
+                    adam_weight_decay=self.adam_weight_decay,
                     mask=self.build_weight_decay_mask(),
                     )
-            
+
             if self.max_grad_norm is not None:
                 return optax.chain(
                         optax.clip_by_global_norm(self.max_grad_norm),
@@ -108,110 +106,75 @@ class LowRankOrthogonalConfig(OptimizerConfig):
                         )
             else:
                 return base_opt
-                
+
         return optax.inject_hyperparams(optimizer_factory)(learning_rate=lr_schedule)
 
-def run_variant(variant_id):
-    print(f"--- LAUNCHING SPRINT: VARIANT {variant_id} ---")
-    
-    # Defaults
-    base_lr = 0.02 
-    adam_lr = 6e-4
-    wd = 0.1
-    
-    # --- FIX: Correct String Constants ---
-    STRAT_ADAM = 'adam'
-    STRAT_QR = 'qr_with_pivot' # Must match linalg.py
-    
-    if variant_id == 'A':
-        desc = "Baseline: Sketch=32, Fused, Embed=Adam, Head=Adam"
-        embed_strat = STRAT_ADAM
-        head_strat = STRAT_ADAM
-        sketch = 32
-        
-    elif variant_id == 'B':
-        desc = "HighRank: Sketch=64, Fused, Embed=Adam, Head=Adam"
-        embed_strat = STRAT_ADAM
-        head_strat = STRAT_ADAM
-        sketch = 64
-        
-    elif variant_id == 'C':
-        desc = "EmbedQR: Sketch=32, Fused, Embed=PivotedQR, Head=Adam"
-        embed_strat = STRAT_QR
-        head_strat = STRAT_ADAM
-        sketch = 32
 
-    elif variant_id == 'D':
-        desc = "FullSpecial: Sketch=32, Fused, Embed=PivotedQR, Head=PivotedQR"
-        embed_strat = STRAT_QR
-        head_strat = STRAT_QR
-        sketch = 32
-        
-    else:
-        print(f"Error: Unknown variant '{variant_id}'. Choose A, B, C, or D.")
-        return
+def run_variant(variant_id):    # --- TUNING ---
+    LRA_LR = float(os.environ.get("TUNE_LRA_LR", "0.02"))
+    ADAM_LR = float(os.environ.get("TUNE_ADAM_LR", "0.003"))
 
-    # Build Optimizer Config
+    # Fixed for this campaign
+    KRYLOV = 0
+    RANK = 32
+    SCHEDULE = "linear"
+
+    RUN_ID_SUFFIX = os.environ.get("RUN_ID_SUFFIX", "default")
+    STEPS = int(os.environ.get("TUNE_STEPS", "4000"))
+
+    print(f">>> LRA RUN: LR={LRA_LR}, Adam={ADAM_LR}, K={KRYLOV}, R={RANK}, S={SCHEDULE}")
+
     opt_config = LowRankOrthogonalConfig(
-        learning_rate=base_lr,
-        adam_learning_rate=adam_lr,
-        weight_decay=wd,
-        lr_schedule='cosine',
-        warmup=0.1, 
-        min_lr_ratio=0.1,
-        rank_val=sketch,
-        embedding_strategy=embed_strat,
-        lm_head_strategy=head_strat,
-        krylov_iter=1
+        learning_rate=LRA_LR,
+        adam_learning_rate=ADAM_LR,
+
+        weight_decay=0.0,      # Zero WD for Matrix updates (Like Muon)
+        adam_weight_decay=0.1, # (Passed to logic, see note above)
+
+        lr_schedule=SCHEDULE,  # Linear
+        warmup=0.1,
+        min_lr_ratio=0.0,      # Linear decay to 0
+
+        rank_val=RANK,
+        krylov_iter=KRYLOV,
+        embedding_strategy="adam",
+        lm_head_strategy="adam"
     )
 
-    # Build Training Config
     train_config = LraTrainConfig(
         resources=GpuConfig(gpu_count=4, accelerator_type="A100"),
         train_batch_size=128,
-        num_train_steps=2000, 
-        
-        # --- FIX: Add Missing Fields ---
-        learning_rate=base_lr, 
-        weight_decay=wd,
-        
-        # Disable Eval for Sprint (Set > num_train_steps)
-        steps_per_eval=2001, 
-        # -------------------------------
+        num_train_steps=STEPS,
+        learning_rate=LRA_LR,
+        weight_decay=0.1,  # General flag
+
+        steps_per_eval=1000,
+        steps_per_export=5000,
 
         optimizer_config=opt_config,
-        
-        # Axis resources (Redundant due to patch, but safe to keep)
-        axis_resources={ 
+        axis_resources={
             'batch': 'data',
-            'vocab': None,
-            'mlp': None,
-            'embed': None,
-            'heads': None,
-            'kv_heads': None,
+            'vocab': None, 'mlp': None, 'embed': None, 'heads': None, 'kv_heads': None,
         },
     )
 
-    # Setup WandB Environment
     os.environ["WANDB_PROJECT"] = "lra-optimizer"
-    os.environ["WANDB_RUN_GROUP"] = "lra_sprint_150m"
-    os.environ["WANDB_TAGS"] = f"sprint,variant_{variant_id}"
+    os.environ["WANDB_RUN_GROUP"] = "combined_sweep"
+    os.environ["WANDB_TAGS"] = f"lra,rank{RANK},k{KRYLOV},linear"
+    os.environ["WANDB_ENTITY"] = "david-tweedle-none"
 
     speedrun_conf = SpeedrunConfig(
         author=Author(name="David Tweedle", affiliation="Indep", url="https://github.com/davidtweedle"),
-        description=desc,
+        description=f"LRA Sweep: L={LRA_LR}, A={ADAM_LR}",
         model_config=llama_150m,
         train_config=train_config
     )
 
-    # Force Run ID to be unique per variant
-    executor_main(steps=default_speedrun(f"sprint_150m_{variant_id}", speedrun_conf))
+    executor_main(steps=default_speedrun(f"lra_{RUN_ID_SUFFIX}", speedrun_conf))
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
+    variant_id = "tune"
     if len(sys.argv) > 1:
         variant_id = sys.argv[1]
-        # Clean up argv so Levanter doesn't get confused
-        del sys.argv[1]
-        run_variant(variant_id)
-    else:
-        print("Please provide a variant ID (A, B, C, D)")
+    run_variant(variant_id)

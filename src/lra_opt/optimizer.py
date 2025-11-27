@@ -444,6 +444,7 @@ def low_rank_orthogonal_update(
         embedding_strategy='adam',
         lm_head_strategy='adam',
         adam_lr=None,
+        adam_weight_decay=None,
         eps=1e-8,
         eps_root=0.0,
         weight_decay=0.0,
@@ -457,6 +458,7 @@ def low_rank_orthogonal_update(
     """
     param_label_fn = create_param_labels(embedding_strategy, lm_head_strategy)
     adam_learning_rate = adam_lr if adam_lr is not None else lr
+    adam_weight_decay = adam_weight_decay if adam_weight_decay is not None else weight_decay
     return optax.partition(
             transforms={
                 'low_rank_orthogonal_update': optax.chain(
@@ -479,7 +481,7 @@ def low_rank_orthogonal_update(
                     b2=beta2,
                     eps=eps,
                     eps_root=eps_root,
-                    weight_decay=weight_decay,
+                    weight_decay=adam_weight_decay,
                     mask=mask
                     )
                 },

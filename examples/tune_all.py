@@ -2,74 +2,111 @@ import os
 import subprocess
 import itertools
 
-# --- SHARED GRID (Paper Aligned) ---
-matrix_lrs = [0.01, 0.015, 0.02]      # Muon & LRA Main LR
-adam_lrs = [0.001, 0.003, 0.005]      # Embed/Head LR
+# --- HYPERPARAMETER GRID ---
+# Matrix Learning Rates (for Muon and low-rank Body)
+# Paper suggests ~0.016. We bracket that.
+matrix_lrs = [0.01, 0.02, 0.05]
+
+# Adam Learning Rates (for Embeddings/Heads/etc)
+# Paper suggests ~0.003. We bracket that.
+adam_lrs = [0.001, 0.003, 0.005]
+
+# --- CONSTANTS ---
+LRA_RANK = "32"
+LRA_KRYLOV = "0"
+
 
 def run_sweep():
-    # Initial Cleanup
+    # Global Cleanup before starting
+    print(">>> Killing old Ray processes...")
     subprocess.run(["ray", "stop", "--force"])
 
     combinations = list(itertools.product(matrix_lrs, adam_lrs))
-    print(f"--- Launching Combined Sweep ({len(combinations)} Configs x 2 Optimizers) ---")
+    total = len(combinations) * 2
 
+    count = 0
     for i, (mlr, alr) in enumerate(combinations):
-        print(f"\n=== [{i+1}/{len(combinations)}] Config: Matrix={mlr}, Adam={alr} ===")
 
-        # -----------------------
-        # 1. Run MUON
-        # -----------------------
-        muon_id = f"Muon_M{mlr}_A{alr}"
-        print(f"  > Launching: {muon_id}")
+        # ==========================================
+        # 1. RUN MUON (Linear Schedule)
+        # ==========================================
+        count += 1
+        run_id = f"Muon_M{mlr}_A{alr}_Lin"
+        print(f"\n=== [{count}/{total}] STARTING MUON: {run_id} ===")
 
-        env_muon = os.environ.copy()
-        env_muon["TUNE_MUON_LR"] = str(mlr)
-        env_muon["TUNE_ADAM_LR"] = str(alr)
-        env_muon["RUN_ID_SUFFIX"] = muon_id
-        env_muon["WANDB_MODE"] = "online"
-        env_muon["WANDB_ENTITY"] = "david-tweedle-none"
+        env = os.environ.copy()
+        env["TUNE_MUON_LR"] = str(mlr)
+        env["TUNE_ADAM_LR"] = str(alr)
+        env["TUNE_STEPS"] = "4000"
+        env["RUN_ID_SUFFIX"] = run_id
 
-        # Cleanup & Run Muon
-        subprocess.run(f"rm -rf /workspace/marin_logs/checkpoints/speedrun/muon_lin_{muon_id}", shell=True)
+        # Force Online Logging
+        env["WANDB_MODE"] = "online"
+        env["WANDB_ENTITY"] = "david-tweedle-none"
+        env["WANDB_PROJECT"] = "lroo"
+
+        # Clean Checkpoints
+        subprocess.run(f"rm -rf /workspace/marin_logs/checkpoints/speedrun/muon_{run_id}", shell=True)
+
         try:
-            with open(f"sweep_logs/{muon_id}.log", "w") as f:
+            # Create logs dir
+            os.makedirs("sweep_logs", exist_ok=True)
+
+            # Run Muon Script
+            with open(f"sweep_logs/{run_id}.log", "w") as f:
                 subprocess.run(
                     ["python", "experiments/speedrun/lra_svd_run/run_muon.py"],
-                    env=env_muon, check=True, stdout=f, stderr=subprocess.STDOUT
+                    env=env,
+                    check=True,
+                    stdout=f,
+                    stderr=subprocess.STDOUT
                 )
+            print("  > Muon Finished Successfully.")
+
         except subprocess.CalledProcessError:
-            print(f"    X Muon Failed.")
+            print("  > MUON FAILED. Check logs.")
+            # Cleanup Ray to prevent OOM for next run
             subprocess.run(["ray", "stop", "--force"])
 
-        # -----------------------
-        # 2. Run LRA (Rank 32, K=0)
-        # -----------------------
-        lra_id = f"LRA_M{mlr}_A{alr}"
-        print(f"  > Launching: {lra_id}")
+        # ==========================================
+        # 2. RUN LRA (Linear Matrix / Cosine Adam)
+        # ==========================================
+        count += 1
+        run_id = f"LRA_M{mlr}_A{alr}_R{LRA_RANK}_K{LRA_KRYLOV}"
+        print(f"\n=== [{count}/{total}] STARTING LRA: {run_id} ===")
 
-        env_lra = os.environ.copy()
-        env_lra["TUNE_LRA_LR"] = str(mlr)
-        env_lra["TUNE_ADAM_LR"] = str(alr)
-        env_lra["RUN_ID_SUFFIX"] = lra_id
-        # Fixed params
-        env_lra["TUNE_KRYLOV"] = "0"
-        env_lra["TUNE_RANK"] = "32"
-        env_lra["WANDB_MODE"] = "online"
-        env_lra["WANDB_ENTITY"] = "david-tweedle-none"
+        env = os.environ.copy()
+        env["TUNE_LRA_LR"] = str(mlr)
+        env["TUNE_ADAM_LR"] = str(alr)
+        env["TUNE_RANK"] = LRA_RANK
+        env["TUNE_KRYLOV"] = LRA_KRYLOV
+        env["TUNE_STEPS"] = "4000"
+        env["RUN_ID_SUFFIX"] = run_id
 
-        # Cleanup & Run LRA
-        subprocess.run(f"rm -rf /workspace/marin_logs/checkpoints/speedrun/lra_{lra_id}", shell=True)
+        # Force Online Logging
+        env["WANDB_MODE"] = "online"
+        env["WANDB_ENTITY"] = "david-tweedle-none"
+        env["WANDB_PROJECT"] = "lroo"
+
+        # Clean Checkpoints
+        subprocess.run(f"rm -rf /workspace/marin_logs/checkpoints/speedrun/lra_{run_id}", shell=True)
+
         try:
-            with open(f"sweep_logs/{lra_id}.log", "w") as f:
+            # Run LRA Script
+            with open(f"sweep_logs/{run_id}.log", "w") as f:
                 subprocess.run(
                     ["python", "experiments/speedrun/lra_svd_run/run.py"],
-                    env=env_lra, check=True, stdout=f, stderr=subprocess.STDOUT
+                    env=env,
+                    check=True,
+                    stdout=f,
+                    stderr=subprocess.STDOUT
                 )
+            print("  > LRA Finished Successfully.")
+
         except subprocess.CalledProcessError:
-            print("    X LRA Failed.")
+            print(f"  > LRA FAILED. Check logs.")
             subprocess.run(["ray", "stop", "--force"])
 
 
 if __name__ == "__main__":
-    os.makedirs("sweep_logs", exist_ok=True)
     run_sweep()

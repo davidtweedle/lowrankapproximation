@@ -41,13 +41,15 @@ if __name__ == "__main__":
 
     # Configure Muon
     opt_config = MuonConfig(
-        lr=MUON_LR,            # The matrix learning rate
-        adam_lr=ADAM_LR,       # The embedding/bias learning rate
+        lr=MUON_LR,             # The matrix learning rate
+        adam_lr=ADAM_LR,        # The embedding/bias learning rate
         momentum=0.95,
         nesterov=True,
         backend_steps=5,
-        weight_decay=0.0,      # Muon paper suggests 0 WD for matrices
-        adam_weight_decay=0.1  # But standard WD for embeddings
+        weight_decay=0.0,       # Muon paper suggests 0 WD for matrices
+        adam_weight_decay=0.1,  # But standard WD for embeddings
+        lr_schedule="linear",
+        min_lr_ratio=0.0,
     )
 
     train_config = LraTrainConfig(

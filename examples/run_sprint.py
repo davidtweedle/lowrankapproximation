@@ -74,14 +74,19 @@ class LowRankOrthogonalConfig(OptimizerConfig):
         # Handle separate Adam LR
         if self.adam_learning_rate is not None:
             # Create a temp config just to get the schedule function
-            adam_conf = dataclasses.replace(self, learning_rate=self.adam_learning_rate)
+            adam_conf = dataclasses.replace(
+                    self,
+                    learning_rate=self.adam_learning_rate,
+                    lr_schedule="cosine",
+                    min_lr_ratio=0.1,
+                    )
             adam_schedule = adam_conf.lr_scheduler(num_train_steps)
         else:
             adam_schedule = lr_schedule
 
         key = jax.random.key(self.seed)
 
-        def optimizer_factory(learning_rate):
+        def optimizer_factory(learning_rate, adam_learning_rate):
             base_opt = low_rank_orthogonal_update(
                     lr=learning_rate,
                     key=key,
@@ -92,7 +97,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
                     rank_val=self.rank_val,
                     embedding_strategy=self.embedding_strategy,
                     lm_head_strategy=self.lm_head_strategy,
-                    adam_lr=adam_schedule,
+                    adam_lr=adam_learning_rate,
                     eps=self.epsilon,
                     weight_decay=self.weight_decay,
                     adam_weight_decay=self.adam_weight_decay,
@@ -107,7 +112,7 @@ class LowRankOrthogonalConfig(OptimizerConfig):
             else:
                 return base_opt
 
-        return optax.inject_hyperparams(optimizer_factory)(learning_rate=lr_schedule)
+        return optax.inject_hyperparams(optimizer_factory)(learning_rate=lr_schedule, adam_learning_rate=adam_schedule)
 
 
 def run_variant(variant_id):    # --- TUNING ---
@@ -158,7 +163,7 @@ def run_variant(variant_id):    # --- TUNING ---
         },
     )
 
-    os.environ["WANDB_PROJECT"] = "lra-optimizer"
+    os.environ["WANDB_PROJECT"] = "lroo"
     os.environ["WANDB_RUN_GROUP"] = "combined_sweep"
     os.environ["WANDB_TAGS"] = f"lra,rank{RANK},k{KRYLOV},linear"
     os.environ["WANDB_ENTITY"] = "david-tweedle-none"

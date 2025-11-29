@@ -18,6 +18,7 @@ from levanter.schedule import IntSchedule
 
 from marin.resources import GpuConfig, TpuPodConfig
 
+
 @LrSchedule.register_subclass("wsd")
 @dataclass(frozen=True)
 class WSDLrSchedule(LrSchedule):
@@ -32,7 +33,6 @@ class WSDLrSchedule(LrSchedule):
         decay_steps = int(remaining_steps * self.decay_ratio)
         stable_steps = remaining_steps - decay_steps
 
-
         # 2. Stable Phase (Peak Constant)
         stable_schedule = optax.constant_schedule(ctx.learning_rate)
 
@@ -46,6 +46,22 @@ class WSDLrSchedule(LrSchedule):
             [stable_schedule, decay_schedule],
             [stable_steps]
         )
+
+
+def _build_manual_schedule(config, num_train_steps):
+    if config.lr_schedule == "wsd":
+        decay_ratio = getattr(config, 'decay_ratio', 0.8)
+        ctx = LrScheduleContext(
+                warmup_steps=int(config.warmup * num_train_steps) if isinstance(config.warmup, float) else (config.warmup or 0),
+                decay_steps=num_train_steps,
+                learning_rate=config.learning_rate,
+                min_lr_ratio=config.min_lr_ratio or 0.0,
+                min_lr=(config.min_lr_ratio or 0.0) * config.learning_rate
+                )
+        return WSDLrSchedule(decay_ratio=decay_ratio).build(ctx)
+    else:
+        return config.lr_scheduler(num_train_steps)
+
 
 @OptimizerConfig.register_subclass("low_rank_orthogonal")
 @dataclass(frozen=True)
@@ -80,7 +96,7 @@ class LROOConfig(OptimizerConfig):
     def build(self, num_train_steps: int):
         print(f"Building optimizer: {self.__class__.__name__}")
 
-        lr_schedule = self.lr_scheduler(num_train_steps)
+        lr_schedule = _build_manual_schedule(self, num_train_steps)
 
         # Handle separate Adam LR
         if self.adam_learning_rate is not None:
@@ -152,7 +168,7 @@ class WSDMuonConfig(OptimizerConfig):
 
     def build(self, num_train_steps):
         # 1. Muon Schedule (WSD/Linear)
-        muon_schedule = self.lr_scheduler(num_train_steps)
+        muon_schedule = _build_manual_schedule(self, num_train_steps)
 
         # 2. Adam Schedule (Force Cosine)
         adam_conf = dataclasses.replace(

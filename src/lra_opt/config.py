@@ -18,6 +18,7 @@ from levanter.schedule import IntSchedule
 
 from marin.resources import GpuConfig, TpuPodConfig
 
+from .optimizer import low_rank_orthogonal_update
 
 @LrSchedule.register_subclass("wsd")
 @dataclass(frozen=True)

@@ -91,6 +91,8 @@ class LROOConfig(OptimizerConfig):
 
     adam_weight_decay: float = 0.1
 
+    decay_ratio: float = 0.8
+
     seed: int = 42
 
     def build(self, num_train_steps: int):

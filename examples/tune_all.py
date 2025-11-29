@@ -5,7 +5,7 @@ import itertools
 # --- HYPERPARAMETER GRID ---
 # Matrix Learning Rates (for Muon and low-rank Body)
 # Paper suggests ~0.016. We bracket that.
-matrix_lrs = [0.01, 0.02, 0.05]
+matrix_lrs = [0.01, 0.015, 0.02]
 
 # Adam Learning Rates (for Embeddings/Heads/etc)
 # Paper suggests ~0.003. We bracket that.
@@ -31,7 +31,7 @@ def run_sweep():
         # 1. RUN MUON (Linear Schedule)
         # ==========================================
         count += 1
-        run_id = f"Muon_M{mlr}_A{alr}_Lin"
+        run_id = f"Muon_M{mlr}_A{alr}_WSD"
         print(f"\n=== [{count}/{total}] STARTING MUON: {run_id} ===")
 
         env = os.environ.copy()
@@ -104,7 +104,7 @@ def run_sweep():
             print("  > LRA Finished Successfully.")
 
         except subprocess.CalledProcessError:
-            print(f"  > LRA FAILED. Check logs.")
+            print("  > LRA FAILED. Check logs.")
             subprocess.run(["ray", "stop", "--force"])
 
 

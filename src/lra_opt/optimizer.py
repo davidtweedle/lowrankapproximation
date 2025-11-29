@@ -436,6 +436,7 @@ class ScaleByLowRankOrthogonalUpdateState:
 def low_rank_orthogonal_update(
         lr,
         key,
+        momentum,
         beta1,
         beta2,
         krylov_iter,
@@ -464,7 +465,7 @@ def low_rank_orthogonal_update(
                 'low_rank_orthogonal_update': optax.chain(
                     scale_by_low_rank_orthogonal_update(
                         key=key,
-                        beta1=beta1,
+                        beta1=momentum,
                         krylov_iter=krylov_iter,
                         rank_type=rank_type,
                         rank_val=rank_val,

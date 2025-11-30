@@ -1,6 +1,4 @@
 import os
-import jax
-from dataclasses import dataclass
 
 from levanter.trainer import TrainerConfig
 from levanter.optim import AdamConfig
@@ -19,11 +17,10 @@ _orig_init = TrainerConfig.__init__
 
 
 def _new_init(self, *args, **kwargs):
-    if 'axis_resources' not in kwargs or kwargs['axis_resources'] is None:
-        kwargs['axis_resources'] = {
-                'batch': 'data',
-                'vocab': None, 'mlp': None, 'embed': None, 'heads': None, 'kv_heads': None,
-                }
+    kwargs['axis_resources'] = {
+            'batch': 'data',
+            'vocab': None, 'mlp': None, 'embed': None, 'heads': None, 'kv_heads': None,
+            }
     _orig_init(self, *args, **kwargs)
 
 
@@ -37,7 +34,7 @@ if __name__ == "__main__":
 
     RUN_ID_SUFFIX = os.environ.get("RUN_ID_SUFFIX", "default")
     STEPS = int(os.environ.get("TUNE_STEPS", "4000"))
-    BATCH_SIZE = 128 # Must match your LRA runs!
+    BATCH_SIZE = 128
 
     print(f"--- LAUNCHING ADAM SWEEP: LR={LR}, WD={WD} ---")
 
@@ -64,8 +61,8 @@ if __name__ == "__main__":
         weight_decay=WD,
 
         # Skip heavy eval for sweep speed, but keep export for safety
-        steps_per_eval=1000,
-        steps_per_export=5000,
+        steps_per_eval=500,
+        steps_per_export=10000,
 
         optimizer_config=opt_config,
 
@@ -76,9 +73,7 @@ if __name__ == "__main__":
     )
 
     # Setup WandB
-    os.environ["WANDB_PROJECT"] = "lra-optimizer"
-    os.environ["WANDB_RUN_GROUP"] = "adam_sweep"
-    os.environ["WANDB_TAGS"] = "adam,baseline,tuning"
+    os.environ["WANDB_PROJECT"] = "lroo"
     os.environ["WANDB_ENTITY"] = "david-tweedle-none"
 
     speedrun_conf = SpeedrunConfig(

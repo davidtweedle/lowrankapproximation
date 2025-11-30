@@ -70,8 +70,8 @@ if __name__ == "__main__":
         learning_rate=LRA_LR,
         weight_decay=0.0,  # General flag
 
-        steps_per_eval=1000,
-        steps_per_export=5000,
+        steps_per_eval=500,
+        steps_per_export=10000,
 
         optimizer_config=opt_config,
         axis_resources={

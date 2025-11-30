@@ -60,8 +60,8 @@ if __name__ == "__main__":
         weight_decay=0.0,
 
         # Optimization for Sweep: Skip heavy evaluation
-        steps_per_eval=1000,
-        steps_per_export=5000,
+        steps_per_eval=500,
+        steps_per_export=10000,
 
         optimizer_config=opt_config,
 

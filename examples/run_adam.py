@@ -9,7 +9,7 @@ from experiments.llama import llama_150m
 from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import SpeedrunConfig, Author, default_speedrun
 from marin.resources import GpuConfig
-from lra_opt.train_config import LraTrainConfig
+from lra_opt import LraTrainConfig
 
 # --- Monkey Patch for Data Parallelism ---
 # Ensures Adam uses the same replication strategy as your LRA run

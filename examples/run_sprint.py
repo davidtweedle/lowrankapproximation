@@ -41,7 +41,7 @@ if __name__ == "__main__":
     STEPS = int(os.environ.get("TUNE_STEPS", "4000"))
 
 
-    print(f">>> LRA RUN: LR={LRA_LR}, Adam={ADAM_LR}, K={KRYLOV}, R={RANK}, S={SCHEDULE}")
+    print(f">>> LRA RUN: LR={LRA_LR}, Adam={ADAM_LR}, K={KRYLOV}, R={RANK}, S=wsd")
 
     opt_config = LROOConfig(
         learning_rate=LRA_LR,

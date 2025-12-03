@@ -4,7 +4,7 @@ import time
 
 # --- GLOBAL SETTINGS ---
 # 40,000 Steps = ~5.2 Billion Tokens (Approx 1.7x Chinchilla for 150M)
-STEPS = 40000
+STEPS = 1000
 WANDB_PROJECT = "lroo"
 ENTITY = "david-tweedle-none"
 
@@ -17,7 +17,7 @@ config_adam = {
         "TUNE_ADAM_LR": "0.003",
         "TUNE_ADAM_WD": "0.1",
         "TUNE_STEPS": str(STEPS),
-        "RUN_ID_SUFFIX": "final_AdamW_Cosine_40k",
+        "RUN_ID_SUFFIX": "test_AdamW_Cosine_40k",
     }
 }
 
@@ -26,10 +26,10 @@ config_muon = {
     "script": "experiments/speedrun/lra_svd_run/run_muon.py",
     "env": {
         "TUNE_MUON_LR": "0.015",
-        "TUNE_ADAM_LR": "0.005",
+        "TUNE_ADAM_LR_RATIO": "0.2",
         "TUNE_KIMI": "False",
         "TUNE_STEPS": str(STEPS),
-        "RUN_ID_SUFFIX": "final_Muon_wsd_40k",
+        "RUN_ID_SUFFIX": "test_Muon_wsd_40k",
     }
 }
 
@@ -38,11 +38,11 @@ config_lra = {
     "script": "experiments/speedrun/lra_svd_run/run.py",
     "env": {
         "TUNE_LRA_LR": "0.02",
-        "TUNE_ADAM_LR": "0.005",
+        "TUNE_ADAM_LR_RATIO": "0.2",
         "TUNE_KRYLOV": "0",
         "TUNE_RANK": "32",
         "TUNE_STEPS": str(STEPS),
-        "RUN_ID_SUFFIX": "final_lroo_Best_40k",
+        "RUN_ID_SUFFIX": "test_lroo_Best_40k",
     }
 }
 

@@ -32,7 +32,7 @@ TrainerConfig.__init__ = _new_init
 if __name__ == "__main__":
 
     LRA_LR = float(os.environ.get("TUNE_LRA_LR", "0.02"))
-    ADAM_LR = float(os.environ.get("TUNE_ADAM_LR", "0.003"))
+    ADAM_LR_RATIO = float(os.environ.get("TUNE_ADAM_LR_RATIO", "0.2"))
 
     KRYLOV = int(os.environ.get("TUNE_KRYLOV", "0"))
     RANK = int(os.environ.get("TUNE_RANK", "32"))
@@ -40,12 +40,11 @@ if __name__ == "__main__":
     RUN_ID_SUFFIX = os.environ.get("RUN_ID_SUFFIX", "default")
     STEPS = int(os.environ.get("TUNE_STEPS", "4000"))
 
-
-    print(f">>> LRA RUN: LR={LRA_LR}, Adam={ADAM_LR}, K={KRYLOV}, R={RANK}, S=wsd")
+    print(f">>> LRA RUN: LR={LRA_LR}, Adam={ADAM_LR_RATIO * LRA_LR}, K={KRYLOV}, R={RANK}, S=wsd")
 
     opt_config = LROOConfig(
         learning_rate=LRA_LR,
-        adam_learning_rate=ADAM_LR,
+        adam_lr_ratio=ADAM_LR_RATIO,
 
         weight_decay=0.0,      # Zero WD for Matrix updates (Like Muon)
         adam_weight_decay=0.1, # (Passed to logic, see note above)

@@ -28,16 +28,16 @@ if __name__ == "__main__":
     # --- TUNING PARAMETERS FROM ENV ---
     # Defaults based on Muon paper recommendations
     MUON_LR = float(os.environ.get("TUNE_MUON_LR", "0.02"))
-    ADAM_LR = float(os.environ.get("TUNE_ADAM_LR", "0.0006"))
+    ADAM_LR_RATIO = float(os.environ.get("TUNE_ADAM_LR_RATIO", "0.2"))
     RUN_ID_SUFFIX = os.environ.get("RUN_ID_SUFFIX", "default")
     STEPS = int(os.environ.get("TUNE_STEPS", "4000"))
 
-    print(f"--- LAUNCHING MUON SWEEP: MuonLR={MUON_LR}, AdamLR={ADAM_LR} ---")
+    print(f"--- LAUNCHING MUON SWEEP: MuonLR={MUON_LR}, AdamLR={MUON_LR * ADAM_LR_RATIO} ---")
 
     # Configure Muon
     opt_config = WSDMuonConfig(
         lr=MUON_LR,             # The matrix learning rate
-        adam_lr=ADAM_LR,        # The embedding/bias learning rate
+        adam_lr_ratio=ADAM_LR_RATIO,        # The embedding/bias learning rate
         lr_schedule="wsd",
         decay_ratio=0.8,
         warmup=0,

@@ -89,6 +89,7 @@ class LROOConfig(OptimizerConfig):
     lm_head_strategy: str = "adam"
 
     adam_learning_rate: Optional[float] = None
+    adam_lr_ratio: float = 0.2
 
     adam_weight_decay: float = 0.1
 
@@ -103,16 +104,11 @@ class LROOConfig(OptimizerConfig):
 
         # Handle separate Adam LR
         if self.adam_learning_rate is not None:
-            # Create a temp config just to get the schedule function
-            adam_conf = dataclasses.replace(
-                    self,
-                    learning_rate=self.adam_learning_rate,
-                    lr_schedule="cosine",
-                    min_lr_ratio=0.1,
-                    )
-            adam_schedule = adam_conf.lr_scheduler(num_train_steps)
+            ratio = self.adam_learning_rate / self.learning_rate
         else:
-            adam_schedule = lr_schedule
+            ratio = self.adam_lr_ratio
+        def adam_schedule(step):
+            return lr_schedule(step) * ratio
 
         key = jax.random.key(self.seed)
 
@@ -153,7 +149,8 @@ class WSDMuonConfig(OptimizerConfig):
     Custom Muon Config that supports WSD Scheduling and separate Adam scheduling.
     """
     lr: float = 0.02
-    adam_lr: float = 6e-4
+    adam_lr: Optional[float] = None
+    adam_lr_ratio: float = 0.2
     momentum: float = 0.95
     nesterov: bool = True
     backend_steps: int = 5
@@ -174,13 +171,15 @@ class WSDMuonConfig(OptimizerConfig):
         muon_schedule = _build_manual_schedule(self, num_train_steps)
 
         # 2. Adam Schedule (Force Cosine)
-        adam_conf = dataclasses.replace(
-            self,
-            learning_rate=self.adam_lr,
-            lr_schedule="cosine",
-            min_lr_ratio=0.1
-        )
-        adam_schedule = adam_conf.lr_scheduler(num_train_steps)
+        if self.adam_lr is not None:
+            ratio = self.adam_lr / self.lr
+        else:
+            ratio = self.adam_lr_ratio
+
+        def adam_schedule(step):
+            return muon_schedule(step) * ratio
+
+
 
         def optimizer(learning_rate, adam_lr_val):
             def muon_transform():

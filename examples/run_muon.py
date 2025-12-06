@@ -36,7 +36,7 @@ if __name__ == "__main__":
 
     # Configure Muon
     opt_config = WSDMuonConfig(
-        lr=MUON_LR,             # The matrix learning rate
+        learning_rate=MUON_LR,             # The matrix learning rate
         adam_lr_ratio=ADAM_LR_RATIO,        # The embedding/bias learning rate
         lr_schedule="wsd",
         decay_ratio=0.8,

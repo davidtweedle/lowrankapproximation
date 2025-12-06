@@ -148,7 +148,7 @@ class WSDMuonConfig(OptimizerConfig):
     """
     Custom Muon Config that supports WSD Scheduling and separate Adam scheduling.
     """
-    lr: float = 0.02
+    learning_rate: float = 0.02
     adam_lr: Optional[float] = None
     adam_lr_ratio: float = 0.2
     momentum: float = 0.95

@@ -11,8 +11,8 @@ matrix_lrs = [0.035]
 adam_lr_ratios = [0.4]
 
 # --- CONSTANTS ---
-sketch_vals = [2, 4, 8, 16]
-rank_vals = [32, 64]
+rank_vals = [2, 4, 8, 16]
+sketch_vals = [32, 64]
 krylovs = [0, 2]
 
 

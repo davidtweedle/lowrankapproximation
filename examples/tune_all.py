@@ -37,9 +37,9 @@ def run_sweep():
         env = os.environ.copy()
         env["TUNE_LRA_LR"] = str(mlr)
         env["TUNE_ADAM_LR_RATIO"] = str(alr)
-        env["TUNE_SKETCH"] = sketch_val
-        env["TUNE_RANK"] = rank_val 
-        env["TUNE_KRYLOV"] = krylov
+        env["TUNE_SKETCH"] = str(sketch_val)
+        env["TUNE_RANK"] = str(rank_val)
+        env["TUNE_KRYLOV"] = str(krylov)
         env["TUNE_STEPS"] = "4000"
         env["RUN_ID_SUFFIX"] = run_id
 

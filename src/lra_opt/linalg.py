@@ -189,7 +189,7 @@ def compute_batched_update(
         B = jnp.einsum('bmd, bmn -> bdn', Q, x)
         # B = Q.T @ x
         Ub, S, Vh = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
-        Ub, S, Vh = Ub[:, :d], S[:d], Vh[:d]
+        Ub, S, Vh = Ub[:, :, :d], S[:, :d], Vh[:, :d]
         mask = (S > EPSILON).astype(jnp.float32)
         Ub = jnp.einsum('bdr, br -> bdr', Ub, mask)
         # U = Q @ Ub
@@ -204,7 +204,7 @@ def compute_batched_update(
         B = jnp.einsum('bmn, bnd -> bmd', x, Q)
         # B = x @ Q
         U, S, Vhb = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
-        U, S, Vhb = U[:, :d], S[:d], Vhb[:d]
+        U, S, Vhb = U[:, :, :d], S[:, :d], Vhb[:, :d]
         mask = (S > EPSILON).astype(jnp.float32)
         U = jnp.einsum('bmr, br -> bmr', U, mask)
         Vh = jnp.einsum('brd, bnd -> brn', Vhb, Q)
@@ -219,7 +219,7 @@ def compute_batched_update(
         B = jnp.einsum('bmd, bmn -> bdn', Q, x)
 
         Ub, S, Vh = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
-        Ub, S, Vh = Ub[:, :d], S[:d], Vh[:d]
+        Ub, S, Vh = Ub[:, :, :d], S[:, :d], Vh[:, :d]
         S = jnp.where(S > EPSILON, S, 0.0)
         U = jnp.einsum('bmd, bdr -> bmr', Q, Ub)
         # U = Q @ Ub

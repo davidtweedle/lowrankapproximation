@@ -4,7 +4,7 @@ import time
 
 # --- GLOBAL SETTINGS ---
 # 40,000 Steps = ~5.2 Billion Tokens (Approx 1.7x Chinchilla for 150M)
-STEPS = 1000
+STEPS = 40000
 WANDB_PROJECT = "lroo"
 ENTITY = "david-tweedle-none"
 

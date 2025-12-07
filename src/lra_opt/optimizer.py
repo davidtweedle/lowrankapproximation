@@ -108,6 +108,7 @@ class ParameterGroup:
 class LayerBucket(NamedTuple):
     max_m: int
     max_n: int
+    sketch: int
     rank: int
     groups: List[ParameterGroup]
     dtype: jnp.dtype
@@ -125,6 +126,7 @@ def _get_path_name(path_node) -> str:
 def _analyze_tree_and_build_buckets(
         params,
         rank_type,
+        sketch_val,
         rank_val,
         embedding_strategy='adam',
         lm_head_strategy='adam',
@@ -219,10 +221,11 @@ def _analyze_tree_and_build_buckets(
     for g in groups:
         if 'qr' in g.factor_type:
             name = f"Special_{g.augmented_shape[0]}x{g.augmented_shape[1]}_{g.weight_leaf_idx}"
-            rank = _pick_rank(*g.augmented_shape, g.factor_type, rank_type, rank_val)
+            sketch, rank = _pick_rank(*g.augmented_shape, g.factor_type, rank_type, rank_val)
             special_bucket_map[name] = LayerBucket(
                     max_m=g.augmented_shape[0],
                     max_n=g.augmented_shape[1],
+                    sketch=sketch,
                     rank=rank,
                     groups=[g],
                     dtype=g.dtype,
@@ -235,11 +238,12 @@ def _analyze_tree_and_build_buckets(
     final_buckets = {}
     for (shape, f_type, dtype), g_list in buckets_by_key.items():
         name = f"Bucket_{shape[0]}x{shape[1]}"
-        rank = _pick_rank(shape[0], shape[1], f_type, rank_type, rank_val)
+        sketch, rank = _pick_rank(shape[0], shape[1], f_type, rank_type, sketch_val, rank_val)
         total_cap = sum(g.batch_size for g in g_list)
         final_buckets[name] = LayerBucket(
                 max_m=shape[0],
                 max_n=shape[1],
+                sketch=sketch,
                 rank=rank,
                 groups=g_list,
                 dtype=dtype,
@@ -275,7 +279,7 @@ def _analyze_tree_and_build_buckets(
     return merged_buckets, leaf_to_bucket
 
 
-def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
+def _pick_rank(m, n, factor_type, rank_type, sketch_val=None, rank_val=None) -> Optional[int]:
     if factor_type.startswith('qr_with_pivot'):
         k = min(m, n)
         d = math.ceil(math.sqrt(max(2, int(k))))
@@ -287,11 +291,13 @@ def _pick_rank(m, n, factor_type, rank_type, rank_val=None) -> Optional[int]:
         r = int(math.sqrt(rmax))
     elif rank_type == 'constant':
         r = int(min(rank_val, rmax)) if rank_val else int(math.sqrt(rmax))
+        sketch = int(min(r, sketch_val)) if sketch_val else r
+        return sketch, r
     else:
         r = int(math.sqrt(rmax))
     r = max(1, r)
     r_po2 = 1 << (r - 1).bit_length()
-    return min(r_po2, rmax)
+    return None, min(r_po2, rmax)
 
 
 def _merge_buckets(initial_bucket_map):
@@ -326,6 +332,7 @@ def _merge_buckets(initial_bucket_map):
             bucket_merged = LayerBucket(
                     max_m=M_new,
                     max_n=N_new,
+                    sketch=max(bucket_A.sketch, bucket_B.sketch),
                     rank=max(bucket_A.rank, bucket_B.rank),
                     groups=bucket_A.groups + bucket_B.groups,
                     dtype=bucket_A.dtype,
@@ -441,6 +448,7 @@ def low_rank_orthogonal_update(
         beta2,
         krylov_iter,
         rank_type,
+        sketch_val,
         rank_val,
         embedding_strategy='adam',
         lm_head_strategy='adam',
@@ -468,6 +476,7 @@ def low_rank_orthogonal_update(
                         beta1=momentum,
                         krylov_iter=krylov_iter,
                         rank_type=rank_type,
+                        sketch_val=sketch_val,
                         rank_val=rank_val,
                         embedding_strategy=embedding_strategy,
                         lm_head_strategy=lm_head_strategy,
@@ -495,6 +504,7 @@ def scale_by_low_rank_orthogonal_update(
       beta1: float = 0.9,
       krylov_iter: int = 2,
       rank_type: str = 'sqrt',
+      sketch_val: Optional[int] = None,
       rank_val: Optional[int] = None,
       embedding_strategy: str = 'adam',
       lm_head_strategy: str = 'adam',
@@ -525,6 +535,7 @@ def scale_by_low_rank_orthogonal_update(
         bucket_structure, leaf_map = _analyze_tree_and_build_buckets(
                 params,
                 rank_type,
+                sketch_val,
                 rank_val,
                 embedding_strategy,
                 lm_head_strategy,
@@ -573,6 +584,7 @@ def scale_by_low_rank_orthogonal_update(
             use_key = bucket_keys[i]
             update = batched_updates[name]
             momentum = batched_momentum[name]
+            sketch = bucket.sketch
             rank = bucket.rank
             factor_type = bucket.factor_type
             updated_momentum = (1 - beta1) * update + beta1 * momentum
@@ -580,6 +592,7 @@ def scale_by_low_rank_orthogonal_update(
             batched_updates[name] = linalg.compute_batched_update(
                     updated_momentum,
                     use_key,
+                    sketch,
                     rank,
                     krylov_iter,
                     factor_type,

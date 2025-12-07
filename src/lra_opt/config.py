@@ -70,7 +70,7 @@ class LROOConfig(OptimizerConfig):
     """
     Configuration for the Low Rank Orthogonal Optimizer.
     """
-    learning_rate: float = 3e-4
+    learning_rate: float = 0.02
     momentum: float = 0.95
     beta1: float = 0.8
     beta2: float = 0.98
@@ -82,7 +82,8 @@ class LROOConfig(OptimizerConfig):
     # lrou Specifics
     krylov_iter: int = 1
     rank_type: str = "constant"
-    rank_val: int = 32
+    sketch_val: int = 64
+    rank_val: int = 8
 
     # Design Strategy Flags
     embedding_strategy: str = "adam"
@@ -121,6 +122,7 @@ class LROOConfig(OptimizerConfig):
                     beta2=self.beta2,
                     krylov_iter=self.krylov_iter,
                     rank_type=self.rank_type,
+                    sketch_val=self.sketch_val,
                     rank_val=self.rank_val,
                     embedding_strategy=self.embedding_strategy,
                     lm_head_strategy=self.lm_head_strategy,

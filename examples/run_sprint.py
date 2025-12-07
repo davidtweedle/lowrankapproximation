@@ -35,7 +35,8 @@ if __name__ == "__main__":
     ADAM_LR_RATIO = float(os.environ.get("TUNE_ADAM_LR_RATIO", "0.2"))
 
     KRYLOV = int(os.environ.get("TUNE_KRYLOV", "0"))
-    RANK = int(os.environ.get("TUNE_RANK", "32"))
+    SKETCH = int(os.environ.get("TUNE_SKETCH", "64"))
+    RANK = int(os.environ.get("TUNE_RANK", "8"))
 
     RUN_ID_SUFFIX = os.environ.get("RUN_ID_SUFFIX", "default")
     STEPS = int(os.environ.get("TUNE_STEPS", "4000"))
@@ -56,6 +57,7 @@ if __name__ == "__main__":
         momentum=0.95,
         beta1=0.8,
 
+        sketch_val=SKETCH,
         rank_val=RANK,
         krylov_iter=KRYLOV,
         embedding_strategy="adam",
@@ -69,7 +71,7 @@ if __name__ == "__main__":
         learning_rate=LRA_LR,
         weight_decay=0.0,  # General flag
 
-        steps_per_eval=500,
+        steps_per_eval=5000,
         steps_per_export=10000,
 
         optimizer_config=opt_config,

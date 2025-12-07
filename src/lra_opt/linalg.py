@@ -171,10 +171,11 @@ def srct_columnwise(
 
 EPSILON = 1e-5
 
-@partial(jax.jit, static_argnums=(2,3,4))
+@partial(jax.jit, static_argnums=(2,3,4,5))
 def compute_batched_update(
         x: jnp.ndarray,
         key: jax.Array,
+        s: int,
         d: int,
         niter: int = 2,
         factor_type: str = 'tall',
@@ -183,11 +184,12 @@ def compute_batched_update(
         b, m, n = x.shape  # assume that m >= n
         orig_dtype = x.dtype
 
-        Q = get_approximate_basis(x, key, d, niter, factor_type)
+        Q = get_approximate_basis(x, key, s, niter, factor_type)
         # shape b, m, d
         B = jnp.einsum('bmd, bmn -> bdn', Q, x)
         # B = Q.T @ x
         Ub, S, Vh = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
+        Ub, S, Vh = Ub[:, :d], S[:d], Vh[:d]
         mask = (S > EPSILON).astype(jnp.float32)
         Ub = jnp.einsum('bdr, br -> bdr', Ub, mask)
         # U = Q @ Ub
@@ -198,10 +200,11 @@ def compute_batched_update(
     elif factor_type == 'wide':
         b, m, n = x.shape
         orig_dtype = x.dtype
-        Q = get_approximate_basis(x, key, d, niter, factor_type)
+        Q = get_approximate_basis(x, key, s, niter, factor_type)
         B = jnp.einsum('bmn, bnd -> bmd', x, Q)
         # B = x @ Q
         U, S, Vhb = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
+        U, S, Vhb = U[:, :d], S[:d], Vhb[:d]
         mask = (S > EPSILON).astype(jnp.float32)
         U = jnp.einsum('bmr, br -> bmr', U, mask)
         Vh = jnp.einsum('brd, bnd -> brn', Vhb, Q)
@@ -211,11 +214,12 @@ def compute_batched_update(
     elif factor_type == 'right_side_only':
         b, m, n = x.shape
         orig_dtype = x.dtype
-        Q = get_approximate_basis(x, key, d, niter, 'tall')
+        Q = get_approximate_basis(x, key, s, niter, 'tall')
         # B = Q.T @ x
         B = jnp.einsum('bmd, bmn -> bdn', Q, x)
 
         Ub, S, Vh = jnp.linalg.svd(B.astype(jnp.float32), full_matrices=False)
+        Ub, S, Vh = Ub[:, :d], S[:d], Vh[:d]
         S = jnp.where(S > EPSILON, S, 0.0)
         U = jnp.einsum('bmd, bdr -> bmr', Q, Ub)
         # U = Q @ Ub
